@@ -7,6 +7,8 @@ import { pool } from './db/pool';
 import { redis } from './db/redis';
 import authRoutes from './modules/auth/auth.routes';
 import vaultRoutes from './modules/vault/vault.routes';
+import { globalLimiter } from './middleware/rateLimiter';
+import { globalLimiter } from './middleware/rateLimiter';
 
 dotenv.config();
 
@@ -17,6 +19,7 @@ app.use(helmet());
 app.use(cors({ origin: 'http://localhost:5173', credentials: true })); // credentials:true = allow cookies
 app.use(express.json());
 app.use(cookieParser()); // must be before routes that read cookies
+app.use(globalLimiter);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/vault', vaultRoutes); // ← add this
