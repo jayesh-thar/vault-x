@@ -3,11 +3,15 @@ const tsParser = require('@typescript-eslint/parser');
 
 module.exports = [
   {
-    files: ['**/*.ts'],
+    ignores: ['knexfile.ts', 'dist/**', 'node_modules/**'],
+  },
+  {
+    files: ['src/**/*.ts'],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
         project: './tsconfig.json',
+        tsconfigRootDir: __dirname,
         sourceType: 'module',
       },
     },
