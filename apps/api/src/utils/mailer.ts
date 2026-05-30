@@ -1,54 +1,29 @@
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
-// Lazy transporter — only created when needed
-let _transporter: nodemailer.Transporter | null = null;
+const resend = new Resend(process.env.RESEND_API_KEY);
+const FROM = process.env.FROM_EMAIL ?? 'VaultX <onboarding@resend.dev>';
 
-function getTransporter() {
-  if (_transporter) return _transporter;
-
-  if (!process.env.SMTP_HOST) {
-    console.warn('[Mailer] SMTP not configured — emails will be logged only');
-    return null;
-  }
-
-  _transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT ?? 587),
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-
-  return _transporter;
-}
-
-interface SendOptions {
+export async function sendEmail({
+  to,
+  subject,
+  html,
+}: {
   to: string;
   subject: string;
   html: string;
-}
-
-export async function sendEmail(opts: SendOptions): Promise<void> {
-  const transporter = getTransporter();
-
-  if (!transporter) {
-    // Dev fallback: log to console
-    console.log(`\n📧 [EMAIL] To: ${opts.to}`);
-    console.log(`   Subject: ${opts.subject}`);
-    console.log(`   (SMTP not configured — email not sent)\n`);
-    return;
-  }
-
+}): Promise<void> {
   try {
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM ?? 'VaultX <noreply@vaultx.app>',
-      to: opts.to,
-      subject: opts.subject,
-      html: opts.html,
+    const { error } = await resend.emails.send({
+      from: FROM,
+      to,
+      subject,
+      html,
     });
+    if (error) {
+      console.error('Resend error:', error);
+    }
   } catch (err) {
-    // Never let email failures crash the app
-    console.error('[Mailer] Failed to send email:', err);
+    // Fail-open: email failure never blocks the user action
+    console.error('Email send failed (non-fatal):', err);
   }
 }

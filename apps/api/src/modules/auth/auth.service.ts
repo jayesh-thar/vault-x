@@ -187,8 +187,20 @@ export async function refreshSession(refreshToken: string) {
   const tokenHash = hashToken(refreshToken);
   const redisKey = `session:${sessionId}`;
 
-  const cached = await redis.get(redisKey);
-  if (!cached) throw new Error('SESSION_NOT_FOUND');
+  let cached = await redis.get(redisKey).catch(() => null);
+  if (!cached) {
+    // Redis miss — fall back to PostgreSQL
+    const dbFallback = await pool.query(
+      'SELECT refresh_token_hash, device_info FROM sessions WHERE id = $1 AND expires_at > NOW()',
+      [sessionId]
+    );
+    if (!dbFallback.rows.length) throw new Error('SESSION_NOT_FOUND');
+    cached = JSON.stringify({
+      userId,
+      refreshTokenHash: dbFallback.rows[0].refresh_token_hash,
+      deviceInfo: JSON.parse(dbFallback.rows[0].device_info),
+    });
+  }
 
   const session = JSON.parse(cached);
 

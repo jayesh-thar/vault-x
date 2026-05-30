@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { AxiosError } from 'axios';
 import api from '../lib/api';
-import { deriveKeys, toHex } from '../lib/kdf';
+import { DEFAULT_KDF_PARAMS, deriveKeys, toHex } from '../lib/kdf';
 import { decryptBytes } from '../lib/crypto';
-import { loadKdfLocally, saveSession } from '../lib/storage';
+import { saveSession } from '../lib/storage';
 import { useVaultStore } from '../store/useVaultStore';
 
 // Update this interface
@@ -26,35 +25,30 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setMsg] = useState('');
 
-  async function handleLogin() {
-    setError('');
+  async function handleSubmit() {
     if (!email || !password) return setError('All fields are required.');
-
-    // Retrieve kdf params stored locally at registration
-    const kdfData = loadKdfLocally(email);
-    if (!kdfData) {
-      return setError(
-        'No vault found for this email on this device. Please register first.'
-      );
-    }
-
     setLoading(true);
+    setError('');
+
     try {
+      setMsg('Verifying identity...');
+      const preRes = await api.post('/api/auth/prelogin', { email });
+      const { kdfSalt, kdfParams } = preRes.data;
+
       setMsg('Deriving keys...');
+      await new Promise((r) => setTimeout(r, 50)); // let UI render before heavy crypto
       const { authKey, vaultKey: derivedKey } = await deriveKeys(
         password,
-        kdfData.kdfSalt,
-        kdfData.kdfParams
+        kdfSalt,
+        kdfParams ?? DEFAULT_KDF_PARAMS
       );
 
-      setMsg('Authenticating...');
-      const { data } = await api.post<LoginResponse>('/api/auth/login', {
+      setMsg('Decrypting vault...');
+      const { data } = await api.post('/api/auth/login', {
         email,
         authKey: toHex(authKey),
       });
 
-      setMsg('Unlocking vault...');
-      // Decrypt the vault master key using the derived key
       const masterKey = await decryptBytes(
         { ciphertext: data.vaultKeyEnc, iv: data.vaultKeyIv },
         derivedKey
@@ -62,25 +56,17 @@ export default function Login() {
 
       setAuth(data.userId, data.accessToken);
       setVaultKey(masterKey);
-      // Save full session to localStorage for unlock-on-reload
       saveSession({
         email,
         userId: data.userId,
-        kdfSalt: kdfData.kdfSalt,
-        kdfParams: kdfData.kdfParams,
+        kdfSalt,
+        kdfParams: kdfParams ?? DEFAULT_KDF_PARAMS,
         vaultKeyEnc: data.vaultKeyEnc,
         vaultKeyIv: data.vaultKeyIv,
       });
       navigate('/dashboard');
-    } catch (err) {
-      const e = err as AxiosError<{ message?: string }>;
-      if (e.response?.status === 401) {
-        setError('Incorrect password.');
-      } else {
-        setError(
-          e.response?.data?.message ?? 'Login failed. Please try again.'
-        );
-      }
+    } catch {
+      setError('Invalid email or password.');
     } finally {
       setLoading(false);
       setMsg('');
@@ -181,7 +167,7 @@ export default function Login() {
                 type={showPass ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
                 placeholder="Enter your master password"
                 disabled={loading}
                 className="w-full rounded-lg px-3 py-2.5 text-sm outline-none pr-14"
@@ -249,7 +235,7 @@ export default function Login() {
 
           {/* Submit */}
           <button
-            onClick={handleLogin}
+            onClick={handleSubmit}
             disabled={loading}
             className="w-full rounded-lg py-2.5 text-sm font-medium mt-2"
             style={{
@@ -259,7 +245,7 @@ export default function Login() {
               cursor: loading ? 'not-allowed' : 'pointer',
             }}
           >
-            {loading ? loadingMsg : 'Unlock vault'}
+            {loading ? loadingMsg || 'Signing in...' : 'Unlock vault'}
           </button>
         </div>
 

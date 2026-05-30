@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { AxiosError } from 'axios';
+// import type { AxiosError } from 'axios';
 import api from '../lib/api';
-import { loadSession } from '../lib/storage';
 import {
   deriveKeys,
   generateSalt,
@@ -13,8 +12,7 @@ import { decryptBytes, encryptBytes, encrypt } from '../lib/crypto';
 import { parseCSV, type ParsedItem } from '../lib/csvImport';
 import { useVaultStore } from '../store/useVaultStore';
 import { toast } from '../lib/toast';
-import { clearStoredSession } from '../lib/storage';
-
+import { clearStoredSession, loadSession, saveSession } from '../lib/storage';
 type Tab = 'profile' | 'security' | 'appearance' | 'data';
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -748,7 +746,8 @@ function SessionsCard() {
 // ─── Security Tab ─────────────────────────────────────────────────────────────
 
 function SecurityTab({ session }: { session: ReturnType<typeof loadSession> }) {
-  const { vaultKey } = useVaultStore();
+  const navigate = useNavigate(); // ← ADD
+  const { vaultKey, clearSession } = useVaultStore(); // ← ADD clearSession
 
   // OTP state
   const [otpStep, setOtpStep] = useState<'initial' | 'sent' | 'verified'>(
@@ -857,7 +856,24 @@ function SecurityTab({ session }: { session: ReturnType<typeof loadSession> }) {
       setNewPass('');
       setConfirm('');
       setOtpStep('initial');
-      setOtpCode('');
+      setOtpDigits(['', '', '', '', '', '']);
+      setSuccess(true);
+
+      // Update localStorage with new kdf params so re-login works
+      saveSession({
+        email: session.email,
+        userId: session.userId,
+        kdfSalt: newKdfSalt,
+        kdfParams: DEFAULT_KDF_PARAMS,
+        vaultKeyEnc: newVaultKeyEnc,
+        vaultKeyIv: newVaultKeyIv,
+      });
+
+      // Sessions are all deleted server-side — must re-login
+      setTimeout(() => {
+        clearSession(); // clear Zustand
+        navigate('/login');
+      }, 2000);
     } catch (e: any) {
       setErrorMsg(
         e.response?.data?.error ??

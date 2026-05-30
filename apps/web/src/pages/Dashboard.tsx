@@ -42,6 +42,7 @@ export interface ItemPayload {
   passwordChangedAt?: string; // ISO date string — for age tracking
   totpSecret?: string; // base32 TOTP secret
   passwordHistory?: PasswordHistoryEntry[]; // last 5 old passwords
+  tags?: string[];
 }
 
 export interface DecryptedVaultItem {
@@ -71,6 +72,7 @@ interface FormState {
   customFields: CustomField[];
   totpSecret: string;
   originalPassword: string; // (tracks original to detect changes)
+  tags: string[];
 }
 
 const EMPTY_FORM: FormState = {
@@ -90,6 +92,7 @@ const EMPTY_FORM: FormState = {
   customFields: [],
   totpSecret: '',
   originalPassword: '',
+  tags: [],
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -107,6 +110,7 @@ function buildPayload(form: FormState, isNewPassword = false): ItemPayload {
   const base = {
     favorite: form.favorite,
     customFields: form.customFields.length > 0 ? form.customFields : undefined,
+    tags: form.tags.length > 0 ? form.tags : undefined,
   };
   if (form.type === 'login') {
     return {
@@ -303,6 +307,7 @@ export default function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeType, setActiveType] = useState('all');
   const [activeCategory, setActiveCategory] = useState('');
+  const [activeTag, setActiveTag] = useState('');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -369,13 +374,20 @@ export default function Dashboard() {
           return false;
       }
       if (activeCategory) return (item.category ?? '') === activeCategory;
+      if (activeTag) return (item.payload.tags ?? []).includes(activeTag); // ← ADD
       if (activeType === 'favorites') return item.payload.favorite === true;
       if (activeType === 'login') return item.type === 'login';
       if (activeType === 'note') return item.type === 'note';
       if (activeType === 'card') return item.type === 'card';
       return true;
     });
-  }, [items, search, activeType, activeCategory]);
+  }, [items, search, activeType, activeCategory, activeTag]);
+
+  function handleTagChange(tag: string) {
+    setActiveTag((prev) => (prev === tag ? '' : tag));
+    setActiveType('all');
+    setActiveCategory('');
+  }
 
   // ── Modal ──────────────────────────────────────────────────────────────────
 
@@ -412,6 +424,7 @@ export default function Dashboard() {
       customFields: item.payload.customFields ?? [],
       totpSecret: item.payload.totpSecret ?? '',
       originalPassword: item.payload.password ?? '', // save original to detect changes
+      tags: item.payload.tags ?? [],
     });
     setEditingId(item.id);
     setFormError('');
@@ -482,8 +495,16 @@ export default function Dashboard() {
       }
       closeModal();
       await fetchItems();
-    } catch {
-      setFormError('Failed to save. Please try again.');
+    } catch (err: any) {
+      if (err.response?.status === 404) {
+        setFormError('Item was deleted elsewhere. Refreshing...');
+        setTimeout(() => {
+          closeModal();
+          fetchItems();
+        }, 1500);
+      } else {
+        setFormError('Failed to save. Please try again.');
+      }
     } finally {
       setSaving(false);
     }
@@ -534,11 +555,13 @@ export default function Dashboard() {
   function handleTypeChange(type: string) {
     setActiveType(type);
     setActiveCategory(''); // clear category when type filter changes
+    setActiveTag('');
   }
 
   function handleCategoryChange(cat: string) {
     setActiveCategory((prev) => (prev === cat ? '' : cat)); // toggle
     setActiveType('all'); // clear type when category filter changes
+    setActiveTag('');
   }
 
   async function generateShareLink() {
@@ -623,6 +646,8 @@ export default function Dashboard() {
         onLockVault={handleLockVault}
         displayName={displayName}
         profilePhoto={profilePhoto}
+        activeTag={activeTag}
+        onTagChange={handleTagChange}
       />
 
       {/* Main */}
@@ -1156,6 +1181,7 @@ export default function Dashboard() {
                 onChange={(v) => setForm((f) => ({ ...f, category: v }))}
                 placeholder="e.g. Work, Social"
               />
+
               <FormField
                 label="Notes"
                 value={form.notes}

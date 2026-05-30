@@ -6,7 +6,7 @@ import { useVaultStore } from '../store/useVaultStore';
 import type { VaultItem } from '../store/useVaultStore';
 import type { ItemPayload } from './Dashboard';
 
-async function checkBreached(password: string): Promise<boolean> {
+async function checkBreached(password: string): Promise<boolean | null> {
   try {
     const encoder = new TextEncoder();
     const buf = await crypto.subtle.digest('SHA-1', encoder.encode(password));
@@ -22,7 +22,7 @@ async function checkBreached(password: string): Promise<boolean> {
       .split('\r\n')
       .some((l) => l.split(':')[0] === hex.slice(5));
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -48,6 +48,7 @@ interface AnalyzedItem {
   isReused: boolean;
   ageDays: number | null;
   issues: string[];
+  hibpFailed?: boolean;
 }
 
 type Status = 'idle' | 'decrypting' | 'checking' | 'done';
@@ -101,7 +102,10 @@ export default function HealthDashboard() {
       const pw = payload.password ?? '';
       const bars = pw ? strengthBars(pw) : 1;
       const isReused = (passMap.get(pw)?.length ?? 1) > 1;
-      const isBreached = pw ? await checkBreached(pw) : false;
+      const breachResult = pw ? await checkBreached(pw) : false;
+      const isBreached = breachResult === true;
+      const hibpFailed = breachResult === null;
+      const breachUnknown = breachResult === null;
       const ageDays = payload.passwordChangedAt
         ? Math.floor(
             (Date.now() - new Date(payload.passwordChangedAt).getTime()) /
@@ -126,6 +130,7 @@ export default function HealthDashboard() {
         isReused,
         ageDays,
         issues,
+        hibpFailed,
       });
       setProgress(i + 1);
       if (i < dec.length - 1) await new Promise((r) => setTimeout(r, 1500));
@@ -367,7 +372,7 @@ export default function HealthDashboard() {
           </div>
         )}
 
-        {/* Results */}
+        {/* ─── Results ─────────────────────────────────────────────────────── */}
         {status === 'done' && (
           <div className="flex flex-col gap-6">
             {/* Hero score card */}
@@ -378,7 +383,6 @@ export default function HealthDashboard() {
                 border: '0.5px solid var(--border)',
               }}
             >
-              {/* Score bar header */}
               <div className="px-6 pt-6 pb-4">
                 <div className="flex items-end justify-between mb-2">
                   <div>
@@ -417,7 +421,6 @@ export default function HealthDashboard() {
                     {n} login{n !== 1 ? 's' : ''} analyzed
                   </p>
                 </div>
-                {/* Score bar */}
                 <div
                   className="h-3 rounded-full overflow-hidden"
                   style={{ background: 'var(--border)' }}
@@ -429,7 +432,7 @@ export default function HealthDashboard() {
                 </div>
               </div>
 
-              {/* Issue metrics */}
+              {/* Issue metric buttons — NO banner inside here */}
               <div
                 className="grid grid-cols-4"
                 style={{ borderTop: '0.5px solid var(--border)' }}
@@ -471,6 +474,21 @@ export default function HealthDashboard() {
                 ))}
               </div>
             </div>
+
+            {/* HIBP warning — CORRECT POSITION: outside grid, between score card and tabs */}
+            {items.some((i) => i.hibpFailed) && (
+              <div
+                className="rounded-lg px-4 py-2.5 text-xs flex items-center gap-2"
+                style={{
+                  background: 'rgba(245,158,11,0.1)',
+                  color: '#F59E0B',
+                  border: '0.5px solid rgba(245,158,11,0.3)',
+                }}
+              >
+                ⚠ Breach check incomplete — HIBP database was unavailable for
+                some items
+              </div>
+            )}
 
             {/* Filter tabs */}
             <div className="flex gap-2 flex-wrap">
@@ -538,7 +556,6 @@ export default function HealthDashboard() {
                     }}
                   >
                     <div className="flex items-center gap-3 p-4">
-                      {/* Icon */}
                       <div
                         className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-sm font-bold"
                         style={{
@@ -548,7 +565,6 @@ export default function HealthDashboard() {
                       >
                         {item.title.slice(0, 2).toUpperCase()}
                       </div>
-
                       <div className="flex-1 min-w-0">
                         <p
                           className="text-sm font-medium"
@@ -563,8 +579,6 @@ export default function HealthDashboard() {
                           {item.username || item.url}
                         </p>
                       </div>
-
-                      {/* Issue badges */}
                       <div className="flex items-center gap-1.5 flex-wrap justify-end">
                         {item.isBreached && (
                           <span
@@ -610,6 +624,17 @@ export default function HealthDashboard() {
                             📅 {item.ageDays}d old
                           </span>
                         )}
+                        {item.hibpFailed && (
+                          <span
+                            className="text-xs px-2 py-0.5 rounded-full"
+                            style={{
+                              background: 'rgba(245,158,11,0.1)',
+                              color: '#F59E0B',
+                            }}
+                          >
+                            ? Breach unknown
+                          </span>
+                        )}
                         <button
                           onClick={() => navigate('/dashboard')}
                           className="text-xs px-3 py-1.5 rounded-lg font-medium ml-1 vx-btn-ghost"
@@ -623,8 +648,6 @@ export default function HealthDashboard() {
                         </button>
                       </div>
                     </div>
-
-                    {/* Bottom advice bar */}
                     <div
                       className="px-4 py-2"
                       style={{

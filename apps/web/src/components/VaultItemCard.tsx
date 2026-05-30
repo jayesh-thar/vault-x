@@ -105,6 +105,7 @@ export default function VaultItemCard({
   onShare,
 }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [copyCountdown, setCopyCountdown] = useState<number | null>(null);
   const [faviconError, setFaviconError] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -125,6 +126,13 @@ export default function VaultItemCard({
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
+  }, []);
+
+  //browser notification permission request
+  useEffect(() => {
+    if (Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
   }, []);
 
   // TOTP auto-refresh every second
@@ -148,19 +156,27 @@ export default function VaultItemCard({
   }, [payload.totpSecret]);
 
   async function handleCopy(text: string) {
-    await navigator.clipboard.writeText(text);
-    setCopyCountdown(30);
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    intervalRef.current = setInterval(() => {
-      setCopyCountdown((prev) => {
-        if (prev === null || prev <= 1) {
-          clearInterval(intervalRef.current!);
-          navigator.clipboard.writeText('').catch(() => {});
-          return null;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+
+      // Auto-clear clipboard after 30 seconds
+      setTimeout(async () => {
+        await navigator.clipboard.writeText('').catch(() => {});
+        setCopied(false);
+
+        // Browser notification when clipboard clears (optional, needs permission)
+        if (Notification.permission === 'granted') {
+          new Notification('VaultX', {
+            body: 'Password removed from clipboard',
+            silent: true,
+            tag: 'clipboard-clear',
+          });
         }
-        return prev - 1;
-      });
-    }, 1000);
+      }, 30_000);
+    } catch {
+      // Clipboard API not available — fail silently
+    }
   }
 
   const passwordAge = useMemo(() => {

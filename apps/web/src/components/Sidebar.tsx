@@ -149,6 +149,38 @@ const ChevronIcon = ({ up }: { up: boolean }) => (
   </svg>
 );
 
+const ChartIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+    <rect
+      x="2"
+      y="12"
+      width="4"
+      height="10"
+      rx="1"
+      stroke="currentColor"
+      strokeWidth="2"
+    />
+    <rect
+      x="9"
+      y="7"
+      width="4"
+      height="15"
+      rx="1"
+      stroke="currentColor"
+      strokeWidth="2"
+    />
+    <rect
+      x="16"
+      y="3"
+      width="4"
+      height="19"
+      rx="1"
+      stroke="currentColor"
+      strokeWidth="2"
+    />
+  </svg>
+);
+
 // ─── NavItem ──────────────────────────────────────────────────────────────────
 function NavItem({
   icon,
@@ -224,6 +256,8 @@ interface SidebarProps {
   onLockVault: () => void;
   displayName: string;
   profilePhoto: string | null;
+  activeTag: string;
+  onTagChange: (t: string) => void;
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -242,7 +276,21 @@ export default function Sidebar(props: SidebarProps) {
     onLockVault,
     displayName,
     profilePhoto,
+    activeTag,
+    onTagChange,
   } = props;
+
+  const allTags = useMemo(() => {
+    const map = new Map<string, number>();
+    items.forEach((item) =>
+      (item.payload.tags ?? []).forEach((tag) =>
+        map.set(tag, (map.get(tag) ?? 0) + 1)
+      )
+    );
+    return [...map.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, count]) => ({ name, count }));
+  }, [items]);
 
   const navigate = useNavigate();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -368,6 +416,15 @@ export default function Sidebar(props: SidebarProps) {
               if (isMobile) onClose();
             }}
           />
+          <NavItem
+            icon={<ChartIcon />}
+            label="Statistics"
+            active={false}
+            onClick={() => {
+              navigate('/stats');
+              if (isMobile) onClose();
+            }}
+          />
         </div>
 
         {/* TYPES section */}
@@ -431,6 +488,34 @@ export default function Sidebar(props: SidebarProps) {
                 count={cat.count}
                 active={activeCategory === cat.name}
                 onClick={() => goCategory(cat.name)}
+              />
+            ))}
+          </div>
+        )}
+
+        {allTags.length > 0 && (
+          <div>
+            <p
+              className="text-xs font-semibold px-2 mb-1.5"
+              style={{
+                color: 'var(--text-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+              }}
+            >
+              Tags
+            </p>
+            {allTags.map((tag) => (
+              <NavItem
+                key={tag.name}
+                icon={<span style={{ fontSize: 10, fontWeight: 700 }}>#</span>}
+                label={tag.name}
+                count={tag.count}
+                active={activeTag === tag.name}
+                onClick={() => {
+                  onTagChange(tag.name);
+                  if (isMobile) onClose();
+                }}
               />
             ))}
           </div>

@@ -13,6 +13,7 @@ import GoogleSetup from './pages/GoogleSetup';
 import GoogleUnlock from './pages/GoogleUnlock';
 import { ToastContainer } from './components/Toast';
 import ErrorBoundary from './components/ErrorBoundary';
+import StatsPage from './pages/Stats';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { userId, vaultKey } = useVaultStore();
@@ -71,6 +72,14 @@ export default function App() {
                 <ErrorBoundary>
                   <HealthDashboard />
                 </ErrorBoundary>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/stats"
+            element={
+              <ProtectedRoute>
+                <StatsPage />
               </ProtectedRoute>
             }
           />

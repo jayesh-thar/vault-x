@@ -1,6 +1,5 @@
 import axios from 'axios';
 
-// Stored at module level — avoids circular import with the store
 let _accessToken: string | null = null;
 
 export const setAccessToken = (token: string | null) => {
@@ -8,8 +7,8 @@ export const setAccessToken = (token: string | null) => {
 };
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:3000',
-  withCredentials: true, // needed to send the httpOnly refresh token cookie
+  baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:5000', // ← was 3000, should be 5000
+  withCredentials: true,
 });
 
 // Attach access token to every outgoing request
@@ -35,14 +34,26 @@ const processQueue = (error: unknown) => {
   failedQueue = [];
 };
 
+// Multi-tab token sync via BroadcastChannel
+try {
+  const syncChannel = new BroadcastChannel('vaultx_auth');
+  syncChannel.addEventListener('message', (e) => {
+    if (e.data?.type === 'TOKEN_REFRESH' && e.data.accessToken) {
+      // Another tab refreshed — use their new token
+      setAccessToken(e.data.accessToken);
+    }
+  });
+} catch {
+  // BroadcastChannel not available in some environments (private mode, old browsers)
+}
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const original = error.config;
 
     if (error.response?.status === 401 && !original._retry) {
-      // ← ADD THIS: don't intercept auth endpoints
-      // 401 on login/register means wrong credentials, not expired token
+      // Don't intercept auth endpoints — 401 there = wrong credentials
       if (original.url?.includes('/auth/')) {
         return Promise.reject(error);
       }
@@ -62,7 +73,19 @@ api.interceptors.response.use(
         const res = await api.post<{ accessToken: string }>(
           '/api/auth/refresh'
         );
-        setAccessToken(res.data.accessToken);
+        const newToken = res.data.accessToken;
+        setAccessToken(newToken);
+
+        // Broadcast new token to other open tabs
+        try {
+          new BroadcastChannel('vaultx_auth').postMessage({
+            type: 'TOKEN_REFRESH',
+            accessToken: newToken,
+          });
+        } catch {
+          /* ignore if BroadcastChannel unavailable */
+        }
+
         processQueue(null);
         return api(original);
       } catch (refreshError) {
