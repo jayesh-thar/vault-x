@@ -10,6 +10,8 @@ import {
   listSessions,
   terminateSession,
   terminateAllOtherSessions,
+  forgotPasswordSendOTP,
+  forgotPasswordReset,
 } from './auth.controller';
 import { authenticate } from '../../middleware/authenticate';
 import { validateEmailDomain } from '../../middleware/emailValidator';
