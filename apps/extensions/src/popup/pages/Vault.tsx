@@ -32,8 +32,18 @@ export default function Vault({ onLogout }: Props) {
       }
     );
     setLoading(false);
-    if (res.success && res.items) setItems(res.items);
-    else setError(res.error ?? 'Failed to load vault');
+    if (res.success && res.items) {
+      // Deduplicate by ID — handles React strict mode double-invoke
+      const seen = new Set<string>();
+      const unique = res.items.filter((item) => {
+        if (seen.has(item.id)) return false;
+        seen.add(item.id);
+        return true;
+      });
+      setItems(unique);
+    } else {
+      setError(res.error ?? 'Failed to load vault');
+    }
   }
 
   async function handleLogout() {
