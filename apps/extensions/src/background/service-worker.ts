@@ -91,22 +91,17 @@ async function handleLogin(payload: {
   const { email, password } = payload;
 
   try {
-    // Step 1: Get kdfSalt from server (needed to derive keys from password)
-    // Server stores kdfSalt per user — we can't derive keys without it
     const prelogin = await apiRequest<{
       kdfSalt: string;
       kdfParams: { iterations: number; memory: number; parallelism: number };
     }>('/api/auth/prelogin', { method: 'POST', body: { email } });
 
-    // Step 2: Derive authKey + vaultKey from master password
-    // This takes ~1-2 seconds (600k PBKDF2 iterations — intentional, stops brute force)
     const { authKey, vaultKey } = await deriveKeys(
       password,
       prelogin.kdfSalt,
       prelogin.kdfParams
     );
 
-    // Step 3: Login with authKey (hex). Server never sees the raw password.
     const loginRes = await apiRequest<{
       accessToken: string;
       vaultKeyEnc: string;
@@ -116,20 +111,28 @@ async function handleLogin(payload: {
       body: { email, authKey: toHex(authKey) },
     });
 
-    // Step 4: Decrypt masterKey using vaultKey
-    // Server stores masterKey encrypted with vaultKey. We decrypt it locally.
-    const masterKeyHex = await decrypt(
+    // Decrypt masterKey — result is a base64 string (44 chars = 32 bytes)
+    const masterKeyDecrypted = await decrypt(
       { ciphertext: loginRes.vaultKeyEnc, iv: loginRes.vaultKeyIv },
       vaultKey
     );
 
-    // Step 5: Convert masterKey hex string → Uint8Array for crypto operations
+    // Convert base64 string → Uint8Array (32 bytes for AES-256)
+    const binary = atob(masterKeyDecrypted);
     const masterKeyBytes = new Uint8Array(
-      masterKeyHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16))
-    );
+      binary.length
+    ) as Uint8Array<ArrayBuffer>;
+    for (let i = 0; i < binary.length; i++) {
+      masterKeyBytes[i] = binary.charCodeAt(i);
+    }
 
-    // Step 6: Save session to chrome.storage.session
-    // Uint8Array can't be stored in JSON → convert to number[]
+    if (masterKeyBytes.length !== 32) {
+      return {
+        success: false,
+        error: `masterKey wrong length: ${masterKeyBytes.length}`,
+      };
+    }
+
     await saveSession({
       masterKey: Array.from(masterKeyBytes),
       accessToken: loginRes.accessToken,
@@ -153,17 +156,20 @@ async function handleGetVaultItems(): Promise<GetVaultItemsResponse> {
   if (!session) return { success: false, error: 'Not logged in' };
 
   try {
-    // Fetch encrypted vault items from API
-    const items = await apiRequest<VaultItem[]>('/api/vault/items', {
-      token: session.accessToken,
-    });
+    const res = await apiRequest<VaultItem[] | { items: VaultItem[] }>(
+      '/api/vault/items',
+      { token: session.accessToken }
+    );
 
-    // Restore masterKey from number[] back to Uint8Array
+    // Handle both { items: [...] } and plain [...] response shapes
+    const items: VaultItem[] = Array.isArray(res)
+      ? res
+      : ((res as { items: VaultItem[] }).items ?? []);
+
     const masterKey = new Uint8Array(
       session.masterKey
     ) as Uint8Array<ArrayBuffer>;
 
-    // Decrypt each item's encrypted_data using masterKey
     const decrypted: DecryptedItem[] = await Promise.all(
       items.map(async (item) => {
         const plaintext = await decrypt(
@@ -223,7 +229,9 @@ async function handleSaveCredentials(payload: {
     const masterKey = new Uint8Array(
       session.masterKey
     ) as Uint8Array<ArrayBuffer>;
-    const { encrypt } = await import('../lib/crypto');
+
+    // REMOVE this line → const { encrypt } = await import('../lib/crypto');
+    // encrypt is already imported at top of file
 
     const plaintext = JSON.stringify({
       title: payload.title,
@@ -237,12 +245,7 @@ async function handleSaveCredentials(payload: {
     await apiRequest('/api/vault/items', {
       method: 'POST',
       token: session.accessToken,
-      body: {
-        type: 'login',
-        encryptedData: ciphertext,
-        iv,
-        category: null,
-      },
+      body: { type: 'login', encryptedData: ciphertext, iv, category: null },
     });
 
     return { success: true };
