@@ -905,6 +905,8 @@ function SecurityTab({ session }: { session: ReturnType<typeof loadSession> }) {
         {/* Sessions section */}
         <SessionsCard />
 
+        <CardPinReset />
+
         {success && (
           <div
             className="rounded-lg px-3 py-2.5 text-sm flex items-center gap-2"
@@ -2062,45 +2064,356 @@ function DataTab({ session }: { session: ReturnType<typeof loadSession> }) {
 
 // In your web app Settings page — add this component
 function CardPinReset() {
-  const [authKey, setAuthKey] = useState('');
-  const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>(
-    'idle'
-  );
-  const [msg, setMsg] = useState('');
+  const [pinExists, setPinExists] = useState<boolean | null>(null);
+  const [step, setStep] = useState<
+    'check' | 'otp_sent' | 'otp_verified' | 'done'
+  >('check');
+  const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
+  const [otpTimer, setOtpTimer] = useState(0);
+  const [otpError, setOtpError] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [maskedEmail, setMaskedEmail] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [pinError, setPinError] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  async function handleReset() {
-    if (!authKey) return;
-    setStatus('loading');
+  const otpCode = otpDigits.join('');
+  const otpExpired = step === 'otp_sent' && otpTimer <= 0;
+
+  useEffect(() => {
+    api
+      .get('/api/auth/card-pin/exists')
+      .then(({ data }) => setPinExists(data.exists))
+      .catch(() => setPinExists(false));
+  }, []);
+
+  useEffect(() => {
+    if (otpTimer <= 0) return;
+    const id = setTimeout(() => setOtpTimer((t) => t - 1), 1000);
+    return () => clearTimeout(id);
+  }, [otpTimer]);
+
+  async function sendOtp() {
+    setOtpLoading(true);
+    setOtpError('');
     try {
-      // Derive authKey from master password first (same as login flow)
-      await api.delete('/api/auth/card-pin', { data: { authKey } });
-      setStatus('done');
-      setMsg(
-        'Card PIN reset. You will be asked to set a new PIN next time you view a card.'
-      );
-    } catch (err: any) {
-      setStatus('error');
-      setMsg(err.response?.data?.error ?? 'Failed to reset PIN');
+      const { data } = await api.post('/api/auth/otp/send');
+      setMaskedEmail(data.maskedEmail);
+      setOtpTimer(60);
+      setStep('otp_sent');
+      setOtpDigits(['', '', '', '', '', '']);
+    } catch (e: any) {
+      setOtpError(e.response?.data?.error ?? 'Failed to send OTP');
+    } finally {
+      setOtpLoading(false);
     }
   }
 
+  async function verifyOtp() {
+    if (otpCode.length !== 6) {
+      setOtpError('Enter 6-digit code');
+      return;
+    }
+    setOtpLoading(true);
+    setOtpError('');
+    try {
+      await api.post('/api/auth/otp/verify', { code: otpCode });
+      setStep('otp_verified');
+    } catch (e: any) {
+      setOtpError(e.response?.data?.error ?? 'Invalid code');
+    } finally {
+      setOtpLoading(false);
+    }
+  }
+
+  async function handleSetPin() {
+    if (newPin.length < 4) {
+      setPinError('At least 4 digits');
+      return;
+    }
+    if (newPin !== confirmPin) {
+      setPinError("PINs don't match");
+      return;
+    }
+    setSaving(true);
+    setPinError('');
+    try {
+      await api.post('/api/auth/card-pin/reset-with-otp', { pin: newPin });
+      setStep('done');
+      setPinExists(true);
+    } catch (e: any) {
+      setPinError(e.response?.data?.error ?? 'Failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (pinExists === null)
+    return (
+      <Card>
+        <SectionLabel>Card PIN</SectionLabel>
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+          Checking...
+        </p>
+      </Card>
+    );
+
   return (
-    <div>
-      <h3>Reset Card PIN</h3>
-      <p>
-        Enter your master password to reset the Card PIN. All cards will re-lock
-        immediately.
-      </p>
-      <input
-        type="password"
-        placeholder="Master Password"
-        value={authKey}
-        onChange={(e) => setAuthKey(e.target.value)}
-      />
-      <button onClick={handleReset} disabled={status === 'loading'}>
-        {status === 'loading' ? 'Resetting...' : 'Reset Card PIN'}
-      </button>
-      {msg && <p>{msg}</p>}
-    </div>
+    <Card>
+      <SectionLabel>Card PIN</SectionLabel>
+
+      {step === 'done' && (
+        <div
+          className="rounded-lg px-3 py-2.5 text-sm flex items-center gap-2"
+          style={{ background: '#0D2818', color: '#10B981' }}
+        >
+          ✓ Card PIN {pinExists ? 'reset' : 'set'} successfully.
+        </div>
+      )}
+
+      {step === 'check' && step !== 'done' && (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+            {pinExists
+              ? 'Reset your Card PIN using email OTP verification. All cards will re-lock immediately.'
+              : 'Set a Card PIN to protect your payment cards in the extension.'}
+          </p>
+          {otpError && (
+            <p className="text-xs" style={{ color: 'var(--danger)' }}>
+              {otpError}
+            </p>
+          )}
+          <button
+            onClick={sendOtp}
+            disabled={otpLoading}
+            className="self-start px-4 py-2.5 rounded-lg text-sm font-medium"
+            style={{
+              background: 'var(--accent)',
+              color: '#fff',
+              opacity: otpLoading ? 0.7 : 1,
+              border: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            {otpLoading ? 'Sending...' : 'Send verification code'}
+          </button>
+        </div>
+      )}
+
+      {step === 'otp_sent' && (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Code sent to{' '}
+              <strong style={{ color: 'var(--text-secondary)' }}>
+                {maskedEmail}
+              </strong>
+            </p>
+            <p
+              className="text-xs font-medium"
+              style={{
+                color: otpTimer <= 10 ? '#EF4444' : 'var(--text-muted)',
+              }}
+            >
+              {otpTimer > 0 ? `${otpTimer}s` : 'Expired'}
+            </p>
+          </div>
+          {otpError && (
+            <p className="text-xs" style={{ color: 'var(--danger)' }}>
+              {otpError}
+            </p>
+          )}
+          <div className="flex gap-2">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <input
+                key={i}
+                id={`card-otp-${i}`}
+                type="text"
+                inputMode="numeric"
+                maxLength={1}
+                value={otpDigits[i]}
+                disabled={otpExpired}
+                onChange={(e) => {
+                  const d = e.target.value.replace(/\D/g, '').slice(-1);
+                  const next = [...otpDigits];
+                  next[i] = d;
+                  setOtpDigits(next);
+                  if (d && i < 5)
+                    document.getElementById(`card-otp-${i + 1}`)?.focus();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Backspace' && !otpDigits[i] && i > 0)
+                    document.getElementById(`card-otp-${i - 1}`)?.focus();
+                  if (e.key === 'Enter' && otpCode.length === 6) verifyOtp();
+                }}
+                onPaste={(e) => {
+                  e.preventDefault();
+                  const p = e.clipboardData
+                    .getData('text')
+                    .replace(/\D/g, '')
+                    .slice(0, 6);
+                  const next = [...otpDigits];
+                  p.split('').forEach((d, idx) => {
+                    if (idx < 6) next[idx] = d;
+                  });
+                  setOtpDigits(next);
+                  document
+                    .getElementById(`card-otp-${Math.min(p.length, 5)}`)
+                    ?.focus();
+                }}
+                className="outline-none text-center text-sm font-semibold font-mono rounded-lg"
+                style={{
+                  width: 40,
+                  height: 44,
+                  background: 'var(--bg-elevated)',
+                  border: otpDigits[i]
+                    ? '1.5px solid var(--accent)'
+                    : '0.5px solid var(--border)',
+                  color: 'var(--text-primary)',
+                  opacity: otpExpired ? 0.5 : 1,
+                }}
+              />
+            ))}
+            {!otpExpired && (
+              <button
+                onClick={verifyOtp}
+                disabled={otpLoading || otpCode.length !== 6}
+                className="px-4 rounded-lg text-sm font-medium"
+                style={{
+                  background: 'var(--accent)',
+                  color: '#fff',
+                  opacity: otpCode.length !== 6 ? 0.5 : 1,
+                  border: 'none',
+                  cursor: 'pointer',
+                  minWidth: 80,
+                }}
+              >
+                {otpLoading ? '...' : 'Verify'}
+              </button>
+            )}
+          </div>
+          <div
+            className="h-0.5 rounded-full overflow-hidden"
+            style={{ background: 'var(--border)' }}
+          >
+            <div
+              className="h-full rounded-full transition-all duration-1000"
+              style={{
+                width: `${(otpTimer / 60) * 100}%`,
+                background: otpTimer <= 10 ? '#EF4444' : 'var(--accent)',
+              }}
+            />
+          </div>
+          <button
+            onClick={sendOtp}
+            disabled={!otpExpired && otpTimer > 0}
+            className="text-xs self-start vx-btn"
+            style={{
+              color: otpExpired ? 'var(--accent)' : 'var(--text-muted)',
+              opacity: !otpExpired && otpTimer > 0 ? 0.4 : 1,
+            }}
+          >
+            Resend code
+          </button>
+        </div>
+      )}
+
+      {step === 'otp_verified' && (
+        <div className="flex flex-col gap-3">
+          <div
+            className="rounded-lg px-3 py-2 text-xs flex items-center gap-2"
+            style={{
+              background: 'var(--accent-subtle)',
+              color: 'var(--accent)',
+            }}
+          >
+            ✓ Identity verified — set your new Card PIN
+          </div>
+          {pinError && (
+            <p className="text-xs" style={{ color: 'var(--danger)' }}>
+              {pinError}
+            </p>
+          )}
+          <div>
+            <label
+              className="block text-xs font-medium mb-1"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              New PIN (4–8 digits)
+            </label>
+            <input
+              type="password"
+              inputMode="numeric"
+              maxLength={8}
+              value={newPin}
+              onChange={(e) => {
+                setNewPin(e.target.value.replace(/\D/g, ''));
+                setPinError('');
+              }}
+              placeholder="• • • •"
+              className="w-full rounded-lg px-3 py-2.5 text-sm outline-none vx-input"
+              style={{
+                background: 'var(--bg-elevated)',
+                border: '0.5px solid var(--border)',
+                color: 'var(--text-primary)',
+                letterSpacing: 6,
+                textAlign: 'center',
+              }}
+              autoFocus
+            />
+          </div>
+          <div>
+            <label
+              className="block text-xs font-medium mb-1"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              Confirm PIN
+            </label>
+            <input
+              type="password"
+              inputMode="numeric"
+              maxLength={8}
+              value={confirmPin}
+              onChange={(e) => {
+                setConfirmPin(e.target.value.replace(/\D/g, ''));
+                setPinError('');
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && handleSetPin()}
+              placeholder="• • • •"
+              className="w-full rounded-lg px-3 py-2.5 text-sm outline-none vx-input"
+              style={{
+                background: 'var(--bg-elevated)',
+                border:
+                  confirmPin && confirmPin !== newPin
+                    ? '0.5px solid var(--danger)'
+                    : '0.5px solid var(--border)',
+                color: 'var(--text-primary)',
+                letterSpacing: 6,
+                textAlign: 'center',
+              }}
+            />
+          </div>
+          <button
+            onClick={handleSetPin}
+            disabled={saving}
+            className="rounded-lg py-2.5 text-sm font-medium"
+            style={{
+              background: 'var(--accent)',
+              color: '#fff',
+              opacity: saving ? 0.7 : 1,
+              border: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            {saving
+              ? 'Saving...'
+              : pinExists
+                ? 'Reset Card PIN'
+                : 'Set Card PIN'}
+          </button>
+        </div>
+      )}
+    </Card>
   );
 }

@@ -16,6 +16,7 @@ import {
   setCardPin,
   verifyCardPin,
   resetCardPin,
+  resetCardPinWithOtp,
 } from './auth.controller';
 import { authenticate } from '../../middleware/authenticate';
 import { validateEmailDomain } from '../../middleware/emailValidator';
@@ -57,5 +58,6 @@ router.get('/card-pin/exists', authenticate, cardPinExists);
 router.post('/card-pin/set', authenticate, setCardPin);
 router.post('/card-pin/verify', authenticate, verifyCardPin);
 router.delete('/card-pin', authenticate, resetCardPin);
+router.post('/card-pin/reset-with-otp', authenticate, resetCardPinWithOtp);
 
 export default router;

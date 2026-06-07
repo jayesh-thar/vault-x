@@ -13,6 +13,7 @@ export interface VaultItem {
 export interface ItemPayload {
   title: string;
   username?: string;
+  email?: string;
   password?: string;
   url?: string;
   totpSecret?: string;

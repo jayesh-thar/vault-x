@@ -507,3 +507,37 @@ export async function resetCardPin(req: Request, res: Response): Promise<void> {
     res.status(500).json({ error: 'Failed to reset PIN' });
   }
 }
+
+export async function resetCardPinWithOtp(
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const { pin } = req.body;
+    if (!pin || !/^\d{4,8}$/.test(pin)) {
+      res.status(400).json({ error: 'PIN must be 4-8 digits' });
+      return;
+    }
+
+    // Check OTP was verified (reuse existing otp_verified Redis key)
+    const otpVerified = await redis.get(`otp_verified:${req.user!.userId}`);
+    if (!otpVerified) {
+      res
+        .status(403)
+        .json({ error: 'Please verify your identity with OTP first' });
+      return;
+    }
+
+    const bcrypt = await import('bcryptjs');
+    const pinHash = await bcrypt.hash(pin, 12);
+    await pool.query('UPDATE users SET card_pin_hash = $1 WHERE id = $2', [
+      pinHash,
+      req.user!.userId,
+    ]);
+    await redis.del(`otp_verified:${req.user!.userId}`);
+
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to reset PIN' });
+  }
+}

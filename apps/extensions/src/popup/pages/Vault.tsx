@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { MSG } from '../../lib/messages';
-import type { GetVaultItemsResponse } from '../../lib/messages';
+import type {
+  GetVaultItemsResponse,
+  CheckSessionResponse,
+} from '../../lib/messages';
 import type { DecryptedItem } from '../../types';
 import VaultItem from '../components/VaultItem';
 
 interface Props {
   onLogout: () => void;
 }
-
 type Filter = 'all' | 'login' | 'note' | 'card';
 
 export default function Vault({ onLogout }: Props) {
@@ -16,33 +18,63 @@ export default function Vault({ onLogout }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [showProfile, setShowProfile] = useState(false);
+  const [email, setEmail] = useState('');
   const loadedRef = useRef(false);
+  const profileRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (loadedRef.current) return;
     loadedRef.current = true;
     loadItems();
+    // Get email from session
+    chrome.runtime
+      .sendMessage<object, CheckSessionResponse>({ type: MSG.CHECK_SESSION })
+      .then((res) => {
+        if (res.email) setEmail(res.email);
+      });
+  }, []);
+
+  // Close profile popup on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (
+        profileRef.current &&
+        !profileRef.current.contains(e.target as Node)
+      ) {
+        setShowProfile(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
   async function loadItems() {
     setLoading(true);
-    const res = await chrome.runtime.sendMessage<object, GetVaultItemsResponse>(
-      {
+    try {
+      const res = await chrome.runtime.sendMessage<
+        object,
+        GetVaultItemsResponse
+      >({
         type: MSG.GET_VAULT_ITEMS,
-      }
-    );
-    setLoading(false);
-    if (res.success && res.items) {
-      // Deduplicate by ID — handles React strict mode double-invoke
-      const seen = new Set<string>();
-      const unique = res.items.filter((item) => {
-        if (seen.has(item.id)) return false;
-        seen.add(item.id);
-        return true;
       });
-      setItems(unique);
-    } else {
-      setError(res.error ?? 'Failed to load vault');
+      setLoading(false);
+      if (res.success && res.items) {
+        const seen = new Set<string>();
+        const unique = res.items.filter((i) => {
+          if (seen.has(i.id)) return false;
+          seen.add(i.id);
+          return true;
+        });
+        setItems(unique);
+      } else if (res.error === 'SESSION_EXPIRED') {
+        onLogout();
+      } else {
+        setError(res.error ?? 'Failed to load vault');
+      }
+    } catch {
+      setLoading(false);
+      setError('Network error');
     }
   }
 
@@ -69,6 +101,10 @@ export default function Vault({ onLogout }: Props) {
     return matchFilter && matchSearch;
   });
 
+  // Avatar initials from email
+  const initials = email ? email.slice(0, 2).toUpperCase() : 'VX';
+  const displayName = email ? email.split('@')[0] : 'User';
+
   return (
     <div style={s.page}>
       {/* Topbar */}
@@ -76,13 +112,80 @@ export default function Vault({ onLogout }: Props) {
         <div style={s.logo}>
           🔐 <span style={s.logoText}>VaultX</span>
         </div>
-        <div style={s.topRight}>
-          <button style={s.refreshBtn} onClick={loadItems} title="Refresh">
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button style={s.iconBtn} onClick={loadItems} title="Refresh">
             ↻
           </button>
-          <button style={s.lockBtn} onClick={handleLogout}>
-            Lock
-          </button>
+
+          {/* Profile button */}
+          <div style={{ position: 'relative' }} ref={profileRef}>
+            <button
+              style={s.avatarBtn}
+              onClick={() => setShowProfile((p) => !p)}
+              title="Profile"
+            >
+              {initials}
+            </button>
+
+            {/* Profile dropdown */}
+            {showProfile && (
+              <div style={s.profilePopup}>
+                {/* Avatar + info */}
+                <div style={s.profileHeader}>
+                  <div style={s.avatarLarge}>{initials}</div>
+                  <div style={{ overflow: 'hidden' }}>
+                    <p style={s.profileName}>{displayName}</p>
+                    <p style={s.profileEmail}>{email}</p>
+                  </div>
+                </div>
+
+                <div style={s.profileDivider} />
+
+                {/* Info rows */}
+                <div style={s.profileRows}>
+                  <div style={s.profileRow}>
+                    <span style={s.profileRowLabel}>Encryption</span>
+                    <span style={s.profileRowValue}>AES-256-GCM</span>
+                  </div>
+                  <div style={s.profileRow}>
+                    <span style={s.profileRowLabel}>Items</span>
+                    <span style={s.profileRowValue}>{counts.all}</span>
+                  </div>
+                  <div style={s.profileRow}>
+                    <span style={s.profileRowLabel}>Status</span>
+                    <span style={{ ...s.profileRowValue, color: '#10b981' }}>
+                      ● Encrypted
+                    </span>
+                  </div>
+                </div>
+
+                <div style={s.profileDivider} />
+
+                {/* Actions */}
+                <div
+                  style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
+                >
+                  <button
+                    style={s.profileAction}
+                    onClick={() => {
+                      chrome.tabs.create({
+                        url: 'http://localhost:5173/settings',
+                      });
+                      setShowProfile(false);
+                    }}
+                  >
+                    ⚙️ Settings & Card PIN
+                  </button>
+                  <button
+                    style={{ ...s.profileAction, ...s.profileActionDanger }}
+                    onClick={handleLogout}
+                  >
+                    🔒 Lock & Sign out
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -117,7 +220,8 @@ export default function Vault({ onLogout }: Props) {
                 : f === 'note'
                   ? '📝'
                   : '💳'}{' '}
-            {f} {counts[f] > 0 && <span style={s.badge}>{counts[f]}</span>}
+            {f}
+            {counts[f] > 0 && <span style={s.badge}>{counts[f]}</span>}
           </button>
         ))}
       </div>
@@ -151,7 +255,7 @@ export default function Vault({ onLogout }: Props) {
         <span>
           {counts.all} item{counts.all !== 1 ? 's' : ''}
         </span>
-        <span style={{ color: '#10b981' }}>● Encrypted</span>
+        <span style={{ color: '#10b981' }}>● Zero-knowledge</span>
       </div>
     </div>
   );
@@ -168,31 +272,104 @@ const s: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '14px 16px',
+    padding: '12px 16px',
     borderBottom: '1px solid #1e293b',
   },
-  logo: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 18 },
-  logoText: { fontWeight: 800, color: '#10b981', fontSize: 18 },
-  topRight: { display: 'flex', gap: 6, alignItems: 'center' },
-  refreshBtn: {
+  logo: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 16 },
+  logoText: { fontWeight: 800, color: '#10b981', fontSize: 16 },
+  iconBtn: {
     padding: '5px 10px',
     borderRadius: 6,
     border: '1px solid #1e293b',
     background: 'transparent',
     color: '#64748b',
-    fontSize: 16,
+    fontSize: 15,
     cursor: 'pointer',
   },
-  lockBtn: {
-    padding: '5px 14px',
-    borderRadius: 6,
+  avatarBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: '50%',
+    border: '2px solid #10b981',
+    background: '#10b98122',
+    color: '#10b981',
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profilePopup: {
+    position: 'absolute',
+    right: 0,
+    top: 40,
+    width: 240,
+    background: '#1e293b',
+    borderRadius: 12,
     border: '1px solid #334155',
-    background: 'transparent',
+    padding: 14,
+    zIndex: 100,
+    boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+  },
+  profileHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  avatarLarge: {
+    width: 40,
+    height: 40,
+    borderRadius: '50%',
+    background: '#10b98122',
+    border: '2px solid #10b981',
+    color: '#10b981',
+    fontSize: 14,
+    fontWeight: 700,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  profileName: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#f1f5f9',
+    margin: 0,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  profileEmail: {
+    fontSize: 11,
+    color: '#64748b',
+    margin: '2px 0 0',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  profileDivider: { height: 1, background: '#334155', margin: '10px 0' },
+  profileRows: { display: 'flex', flexDirection: 'column', gap: 6 },
+  profileRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  profileRowLabel: { fontSize: 12, color: '#64748b' },
+  profileRowValue: { fontSize: 12, color: '#94a3b8' },
+  profileAction: {
+    padding: '8px 10px',
+    borderRadius: 8,
+    border: 'none',
+    background: '#0f172a',
     color: '#94a3b8',
     fontSize: 12,
     cursor: 'pointer',
-    fontWeight: 600,
+    textAlign: 'left',
+    width: '100%',
   },
+  profileActionDanger: { color: '#f87171', marginTop: 2 },
   searchWrap: {
     position: 'relative',
     margin: '12px 16px 0',

@@ -32,6 +32,7 @@ export interface UpdateItemInput {
 // Decrypted structure — only exists client-side, never sent to server
 export interface DecryptedLoginItem {
   username: string;
+  email: string;
   password: string;
   url?: string;
   notes?: string;

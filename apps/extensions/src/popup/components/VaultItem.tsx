@@ -83,9 +83,10 @@ export default function VaultItem({ item, onDeleted }: Props) {
         method: 'DELETE',
         token: session.accessToken,
       });
-      onDeleted?.(item.id);
-    } catch {
-      alert('Failed to delete');
+      onDeleted?.(item.id); // removes from UI immediately
+    } catch (err) {
+      console.error('Delete failed:', err);
+      alert('Failed to delete — check console');
     }
   }
 

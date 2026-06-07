@@ -27,6 +27,7 @@ export interface ItemPayload {
   // Login
   username?: string;
   password?: string;
+  email?: string;
   url?: string;
   // Note
   content?: string;
@@ -59,6 +60,7 @@ interface FormState {
   type: ItemType;
   title: string;
   username: string;
+  email: string;
   password: string;
   url: string;
   content: string;
@@ -79,6 +81,7 @@ const EMPTY_FORM: FormState = {
   type: 'login',
   title: '',
   username: '',
+  email: '',
   password: '',
   url: '',
   content: '',
@@ -116,7 +119,8 @@ function buildPayload(form: FormState, isNewPassword = false): ItemPayload {
     return {
       ...base,
       title: form.title,
-      username: form.username,
+      username: form.username || undefined,
+      email: form.email || undefined,
       password: form.password,
       url: form.url,
       notes: form.notes || undefined,
@@ -411,6 +415,7 @@ export default function Dashboard() {
       type: item.type,
       title: item.payload.title ?? '',
       username: item.payload.username ?? '',
+      email: item.payload.email ?? '',
       password: item.payload.password ?? '',
       url: item.payload.url ?? '',
       content: item.payload.content ?? '',
@@ -928,10 +933,11 @@ export default function Dashboard() {
               </h2>
               <button
                 onClick={closeModal}
-                className="flex-1 rounded-lg py-2.5 text-sm flex-shrink-0 font-medium vx-btn-ghost"
+                className="flex items-center justify-center w-7 h-7 rounded-lg vx-btn"
                 style={{
                   color: 'var(--text-muted)',
                   background: 'var(--bg-elevated)',
+                  flexShrink: 0,
                 }}
               >
                 ✕
@@ -1012,10 +1018,17 @@ export default function Dashboard() {
               {form.type === 'login' && (
                 <>
                   <FormField
-                    label="Username / Email"
+                    label="Username"
                     value={form.username}
                     onChange={(v) => setForm((f) => ({ ...f, username: v }))}
+                    placeholder="johndoe"
+                  />
+                  <FormField
+                    label="Email"
+                    value={form.email}
+                    onChange={(v) => setForm((f) => ({ ...f, email: v }))}
                     placeholder="you@example.com"
+                    inputType="email"
                   />
                   <div>
                     <label
@@ -1150,12 +1163,41 @@ export default function Dashboard() {
                   />
                   <div className="flex gap-2">
                     <div className="flex-1">
-                      <FormField
-                        label="Expiry"
-                        value={form.expiry}
-                        onChange={(v) => setForm((f) => ({ ...f, expiry: v }))}
-                        placeholder="MM/YY"
-                      />
+                      <div>
+                        <label
+                          className="block text-xs font-medium mb-1"
+                          style={{ color: 'var(--text-secondary)' }}
+                        >
+                          Expiry
+                        </label>
+                        <input
+                          type="text"
+                          value={form.expiry}
+                          onChange={(e) => {
+                            let v = e.target.value.replace(/\D/g, '');
+                            if (v.length >= 2)
+                              v = v.slice(0, 2) + '/' + v.slice(2);
+                            if (v.length <= 5)
+                              setForm((f) => ({ ...f, expiry: v }));
+                          }}
+                          placeholder="MM/YY"
+                          maxLength={5}
+                          className="w-full rounded-lg px-3 py-2 text-sm outline-none vx-input"
+                          style={{
+                            background: 'var(--bg-elevated)',
+                            border: (() => {
+                              if (!form.expiry || form.expiry.length < 5)
+                                return '0.5px solid var(--border)';
+                              const [m] = form.expiry.split('/');
+                              const month = parseInt(m);
+                              return month >= 1 && month <= 12
+                                ? '0.5px solid var(--border)'
+                                : '0.5px solid var(--danger)';
+                            })(),
+                            color: 'var(--text-primary)',
+                          }}
+                        />
+                      </div>
                     </div>
                     <div style={{ width: 100 }}>
                       <FormField
@@ -1174,13 +1216,36 @@ export default function Dashboard() {
                 </>
               )}
 
-              {/* Shared */}
-              <FormField
-                label="Category"
-                value={form.category}
-                onChange={(v) => setForm((f) => ({ ...f, category: v }))}
-                placeholder="e.g. Work, Social"
-              />
+              {/* Category with datalist autocomplete */}
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  Category
+                </label>
+                <input
+                  list="category-options"
+                  value={form.category}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, category: e.target.value }))
+                  }
+                  placeholder="e.g. Work, Social"
+                  className="w-full rounded-lg px-3 py-2 text-sm outline-none vx-input"
+                  style={{
+                    background: 'var(--bg-elevated)',
+                    border: '0.5px solid var(--border)',
+                    color: 'var(--text-primary)',
+                  }}
+                />
+                <datalist id="category-options">
+                  {[
+                    ...new Set(items.map((i) => i.category).filter(Boolean)),
+                  ].map((cat) => (
+                    <option key={cat} value={cat!} />
+                  ))}
+                </datalist>
+              </div>
 
               <FormField
                 label="Notes"
@@ -1557,11 +1622,13 @@ function FormField({
   value,
   onChange,
   placeholder,
+  inputType = 'text',
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
+  inputType?: string;
 }) {
   return (
     <div>
@@ -1572,7 +1639,7 @@ function FormField({
         {label}
       </label>
       <input
-        type="text"
+        type={inputType}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
