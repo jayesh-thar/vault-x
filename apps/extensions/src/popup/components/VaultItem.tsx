@@ -5,6 +5,8 @@ import CardPinGate from './CardPinGate';
 interface Props {
   item: DecryptedItem;
   onDeleted?: (id: string) => void;
+  expandedId: string | null;
+  onExpand: (id: string) => void;
 }
 
 const PIN_DURATION = 5 * 60 * 1000;
@@ -15,62 +17,134 @@ async function getPinSessionValid(): Promise<boolean> {
   return !!ts && Date.now() - ts < PIN_DURATION;
 }
 
-function maskCard(num: string): string {
-  const clean = num.replace(/\s/g, '');
-  return `•••• •••• •••• ${clean.slice(-4)}`;
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const days = Math.floor(diff / 86400000);
+  if (days === 0) return 'today';
+  if (days === 1) return '1d ago';
+  if (days < 30) return `${days}d ago`;
+  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
 }
 
-export default function VaultItem({ item, onDeleted }: Props) {
-  const [copied, setCopied] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
+function CopyBtn({ value, label = 'Copy' }: { value: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      style={{ ...btn, ...(copied ? btnDone : {}) }}
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(value);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+    >
+      {copied ? '✓' : label}
+    </button>
+  );
+}
+
+const btn: React.CSSProperties = {
+  padding: '3px 8px',
+  borderRadius: 5,
+  border: 'none',
+  background: '#334155',
+  color: '#94a3b8',
+  fontSize: 11,
+  cursor: 'pointer',
+  fontWeight: 500,
+  flexShrink: 0,
+};
+const btnDone: React.CSSProperties = {
+  background: '#10b98133',
+  color: '#10b981',
+};
+
+function Field({
+  label,
+  value,
+  secret,
+}: {
+  label: string;
+  value: string;
+  secret?: boolean;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <span
+        style={{
+          fontSize: 9,
+          color: '#475569',
+          fontWeight: 700,
+          letterSpacing: '0.8px',
+          textTransform: 'uppercase',
+        }}
+      >
+        {label}
+      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span
+          style={{
+            fontSize: 12,
+            color: '#cbd5e1',
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontFamily: secret ? 'monospace' : 'inherit',
+          }}
+        >
+          {secret && !show ? '••••••••' : value}
+        </span>
+        {secret && (
+          <button
+            style={{ ...btn, padding: '2px 6px' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShow((s) => !s);
+            }}
+          >
+            {show ? 'Hide' : 'Show'}
+          </button>
+        )}
+        <CopyBtn value={value} />
+      </div>
+    </div>
+  );
+}
+
+export default function VaultItem({
+  item,
+  onDeleted,
+  expandedId,
+  onExpand,
+}: Props) {
+  // expanded = true only if THIS item's id matches the currently expanded id
+  const expanded = expandedId === item.id;
+
   const [cardUnlocked, setCardUnlocked] = useState(false);
   const [showPinGate, setShowPinGate] = useState<'view' | 'delete' | null>(
     null
   );
   const [deleteConfirm, setDeleteConfirm] = useState(false);
 
-  // Auto-relock card after 5 minutes
+  // Auto-relock card after 5 min
   useEffect(() => {
     if (!cardUnlocked) return;
-    const timer = setTimeout(async () => {
+    const t = setTimeout(async () => {
       setCardUnlocked(false);
       await chrome.storage.session.remove('cardPinVerifiedAt');
     }, PIN_DURATION);
-    return () => clearTimeout(timer);
+    return () => clearTimeout(t);
   }, [cardUnlocked]);
 
-  function copy(value: string, field: string) {
-    navigator.clipboard.writeText(value);
-    setCopied(field);
-    setTimeout(() => setCopied(null), 1500);
+  function toggleExpand() {
+    onExpand(item.id); // parent toggles — if same id, collapses; if different, expands this one
   }
 
-  function openUrl() {
-    let url = item.payload.url ?? '';
-    if (!url.startsWith('http')) url = 'https://' + url;
-    chrome.tabs.create({ url });
-  }
-
-  async function handleCardViewClick() {
-    if (cardUnlocked) {
-      setCardUnlocked(false);
-      await chrome.storage.session.remove('cardPinVerifiedAt');
-      return;
-    }
-    const valid = await getPinSessionValid();
-    if (valid) {
-      setCardUnlocked(true);
-      return;
-    }
-    setShowPinGate('view');
-  }
-
-  async function handleDeleteClick() {
-    if (item.type === 'card') {
-      setShowPinGate('delete');
-    } else {
-      setDeleteConfirm(true);
-    }
+  function openWebApp() {
+    chrome.tabs.create({ url: 'http://localhost:5173/dashboard' });
   }
 
   async function deleteItem() {
@@ -83,10 +157,9 @@ export default function VaultItem({ item, onDeleted }: Props) {
         method: 'DELETE',
         token: session.accessToken,
       });
-      onDeleted?.(item.id); // removes from UI immediately
-    } catch (err) {
-      console.error('Delete failed:', err);
-      alert('Failed to delete — check console');
+      onDeleted?.(item.id);
+    } catch {
+      alert('Failed to delete');
     }
   }
 
@@ -95,8 +168,8 @@ export default function VaultItem({ item, onDeleted }: Props) {
   const domain = payload.url
     ? (() => {
         try {
-          const u = payload.url!.startsWith('http')
-            ? payload.url!
+          const u = payload.url.startsWith('http')
+            ? payload.url
             : 'https://' + payload.url;
           return new URL(u).hostname;
         } catch {
@@ -105,16 +178,43 @@ export default function VaultItem({ item, onDeleted }: Props) {
       })()
     : null;
 
+  const createdText = item.created_at
+    ? `Added ${relativeTime(item.created_at)}`
+    : null;
+
+  const pwAgeText = (() => {
+    if (!payload.passwordChangedAt) return null;
+    const d = new Date(payload.passwordChangedAt);
+    if (isNaN(d.getTime())) return null;
+    return `Password changed ${relativeTime(payload.passwordChangedAt)}`;
+  })();
+
+  const typeIcon =
+    item.type === 'login' ? '🔑' : item.type === 'note' ? '📝' : '💳';
+
+  const metaText =
+    item.type === 'login'
+      ? payload.username || domain || '—'
+      : item.type === 'note'
+        ? 'Secure note'
+        : cardUnlocked
+          ? `•••• ${payload.number?.slice(-4) ?? '••••'}`
+          : payload.cardholder || 'Payment card';
+
   // ── PIN GATE ───────────────────────────────────────────────────────────────
   if (showPinGate) {
     return (
-      <div style={s.card}>
+      <div style={card}>
         <CardPinGate
           action={showPinGate}
           itemTitle={payload.title}
           onSuccess={async () => {
-            if (showPinGate === 'view') setCardUnlocked(true);
-            else await deleteItem();
+            if (showPinGate === 'view') {
+              setCardUnlocked(true);
+              onExpand(item.id); // expand after unlock
+            } else {
+              await deleteItem();
+            }
             setShowPinGate(null);
           }}
           onCancel={() => setShowPinGate(null)}
@@ -123,43 +223,45 @@ export default function VaultItem({ item, onDeleted }: Props) {
     );
   }
 
-  // ── DELETE CONFIRM (non-card) ──────────────────────────────────────────────
+  // ── DELETE CONFIRM ─────────────────────────────────────────────────────────
   if (deleteConfirm) {
     return (
-      <div style={s.card}>
-        <div style={{ width: '100%' }}>
-          <p
+      <div style={card}>
+        <p
+          style={{
+            fontSize: 13,
+            color: '#f1f5f9',
+            margin: '0 0 4px',
+            fontWeight: 600,
+          }}
+        >
+          Delete "{payload.title}"?
+        </p>
+        <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 10px' }}>
+          Cannot be undone.
+        </p>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
             style={{
-              fontSize: 13,
-              color: '#f1f5f9',
-              margin: '0 0 4px',
-              fontWeight: 600,
+              ...btn,
+              background: '#dc2626',
+              color: '#fff',
+              flex: 1,
+              padding: '7px 0',
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteItem();
             }}
           >
-            Delete "{payload.title}"?
-          </p>
-          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
-            This cannot be undone.
-          </p>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              style={{
-                ...s.btn,
-                background: '#dc2626',
-                color: '#fff',
-                flex: 1,
-              }}
-              onClick={deleteItem}
-            >
-              Delete
-            </button>
-            <button
-              style={{ ...s.btn, flex: 1 }}
-              onClick={() => setDeleteConfirm(false)}
-            >
-              Cancel
-            </button>
-          </div>
+            Delete
+          </button>
+          <button
+            style={{ ...btn, flex: 1, padding: '7px 0' }}
+            onClick={() => setDeleteConfirm(false)}
+          >
+            Cancel
+          </button>
         </div>
       </div>
     );
@@ -168,38 +270,68 @@ export default function VaultItem({ item, onDeleted }: Props) {
   // ── LOGIN ──────────────────────────────────────────────────────────────────
   if (item.type === 'login') {
     return (
-      <div style={s.card}>
-        <div style={s.iconBox}>🔑</div>
-        <div style={s.info}>
-          <p style={s.title}>{payload.title}</p>
-          <p style={s.meta}>{payload.username || domain || '—'}</p>
-        </div>
-        <div style={s.actions}>
-          {payload.username && (
+      <div style={{ ...card, flexDirection: 'column', padding: 0 }}>
+        <div style={header} onClick={toggleExpand}>
+          <div style={iconBox}>{typeIcon}</div>
+          <div style={infoCol}>
+            <p style={titleStyle}>{payload.title}</p>
+            <p style={metaStyle}>
+              {metaText}
+              {createdText && (
+                <span style={createdStyle}> · {createdText}</span>
+              )}
+            </p>
+          </div>
+          <div style={actRow} onClick={(e) => e.stopPropagation()}>
+            {payload.url && (
+              <button
+                style={{ ...btn, ...blueBtn }}
+                onClick={() => {
+                  let u = payload.url!;
+                  if (!u.startsWith('http')) u = 'https://' + u;
+                  chrome.tabs.create({ url: u });
+                }}
+              >
+                ↗
+              </button>
+            )}
+            <button style={{ ...btn, color: '#60a5fa' }} onClick={openWebApp}>
+              Edit
+            </button>
             <button
-              style={s.btn}
-              onClick={() => copy(payload.username!, 'user')}
+              style={{ ...btn, color: '#f87171' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setDeleteConfirm(true);
+              }}
             >
-              {copied === 'user' ? '✓' : 'User'}
+              🗑
             </button>
-          )}
-          {payload.password && (
-            <button
-              style={s.btn}
-              onClick={() => copy(payload.password!, 'pass')}
-            >
-              {copied === 'pass' ? '✓' : 'Pass'}
-            </button>
-          )}
-          {payload.url && (
-            <button style={{ ...s.btn, ...s.blue }} onClick={openUrl}>
-              ↗
-            </button>
-          )}
-          <button style={{ ...s.btn, ...s.danger }} onClick={handleDeleteClick}>
-            🗑
-          </button>
+            <span style={chevron}>{expanded ? '▲' : '▼'}</span>
+          </div>
         </div>
+        {expanded && (
+          <div style={expandBody}>
+            {pwAgeText && <p style={pwAgeStyle}>🕐 {pwAgeText}</p>}
+            <div style={fieldGrid}>
+              {payload.username && (
+                <Field label="Username" value={payload.username} />
+              )}
+              {(payload as any).email && (
+                <Field label="Email" value={(payload as any).email} />
+              )}
+              {payload.password && (
+                <Field label="Password" value={payload.password} secret />
+              )}
+              {payload.url && <Field label="URL" value={payload.url} />}
+              {payload.notes && (
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <Field label="Notes" value={payload.notes} />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -207,69 +339,55 @@ export default function VaultItem({ item, onDeleted }: Props) {
   // ── NOTE ───────────────────────────────────────────────────────────────────
   if (item.type === 'note') {
     return (
-      <div
-        style={{
-          ...s.card,
-          flexDirection: 'column',
-          alignItems: 'stretch',
-          gap: 0,
-          padding: 0,
-          overflow: 'hidden',
-        }}
-      >
-        {/* Header row */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '10px 12px',
-            cursor: 'pointer',
-          }}
-          onClick={() => setExpanded((e) => !e)}
-        >
-          <div style={s.iconBox}>📝</div>
-          <div style={{ ...s.info, flex: 1 }}>
-            <p style={s.title}>{payload.title}</p>
-            <p style={s.meta}>Secure note</p>
+      <div style={{ ...card, flexDirection: 'column', padding: 0 }}>
+        <div style={header} onClick={toggleExpand}>
+          <div style={iconBox}>{typeIcon}</div>
+          <div style={infoCol}>
+            <p style={titleStyle}>{payload.title}</p>
+            <p style={metaStyle}>
+              Secure note
+              {createdText && (
+                <span style={createdStyle}> · {createdText}</span>
+              )}
+            </p>
           </div>
-          <div style={s.actions} onClick={(e) => e.stopPropagation()}>
-            {expanded && payload.content && (
-              <button
-                style={s.btn}
-                onClick={() => copy(payload.content!, 'note')}
-              >
-                {copied === 'note' ? '✓' : 'Copy'}
-              </button>
-            )}
+          <div style={actRow} onClick={(e) => e.stopPropagation()}>
+            <button style={{ ...btn, color: '#60a5fa' }} onClick={openWebApp}>
+              Edit
+            </button>
             <button
-              style={{ ...s.btn, ...s.danger }}
-              onClick={handleDeleteClick}
+              style={{ ...btn, color: '#f87171' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setDeleteConfirm(true);
+              }}
             >
               🗑
             </button>
-            <span style={{ color: '#475569', fontSize: 11 }}>
-              {expanded ? '▲' : '▼'}
-            </span>
+            <span style={chevron}>{expanded ? '▲' : '▼'}</span>
           </div>
         </div>
-        {/* Content */}
         {expanded && (
-          <div
-            style={{ padding: '0 12px 12px', borderTop: '1px solid #1e293b' }}
-          >
-            <p
-              style={{
-                fontSize: 13,
-                color: '#94a3b8',
-                lineHeight: 1.6,
-                margin: '10px 0 0',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-              }}
-            >
-              {payload.content || 'No content'}
-            </p>
+          <div style={expandBody}>
+            {payload.content ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <p
+                  style={{
+                    fontSize: 13,
+                    color: '#94a3b8',
+                    lineHeight: 1.6,
+                    margin: 0,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {payload.content}
+                </p>
+                <CopyBtn value={payload.content} label="Copy content" />
+              </div>
+            ) : (
+              <p style={{ color: '#475569', fontSize: 12 }}>No content</p>
+            )}
           </div>
         )}
       </div>
@@ -279,105 +397,102 @@ export default function VaultItem({ item, onDeleted }: Props) {
   // ── CARD ───────────────────────────────────────────────────────────────────
   if (item.type === 'card') {
     return (
-      <div
-        style={{
-          ...s.card,
-          flexDirection: 'column',
-          alignItems: 'stretch',
-          gap: 0,
-          padding: 0,
-          overflow: 'hidden',
-        }}
-      >
-        {/* Header row — always visible */}
+      <div style={{ ...card, flexDirection: 'column', padding: 0 }}>
         <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '10px 12px',
+          style={header}
+          onClick={async () => {
+            if (!cardUnlocked) {
+              const valid = await getPinSessionValid();
+              if (valid) {
+                setCardUnlocked(true);
+                onExpand(item.id);
+              } else setShowPinGate('view');
+            } else {
+              toggleExpand();
+            }
           }}
         >
-          <div style={s.iconBox}>💳</div>
-          <div style={{ ...s.info, flex: 1 }}>
-            <p style={s.title}>{payload.title}</p>
-            <p style={s.meta}>
-              {cardUnlocked
-                ? maskCard(payload.number ?? '•••• •••• •••• ••••')
-                : payload.cardholder || 'Payment card'}
+          <div style={iconBox}>{typeIcon}</div>
+          <div style={infoCol}>
+            <p style={titleStyle}>{payload.title}</p>
+            <p style={metaStyle}>
+              {metaText}
+              {createdText && (
+                <span style={createdStyle}> · {createdText}</span>
+              )}
             </p>
           </div>
-          <div style={s.actions}>
+          <div style={actRow} onClick={(e) => e.stopPropagation()}>
             {!cardUnlocked ? (
               <button
-                style={{ ...s.btn, ...s.blue }}
-                onClick={handleCardViewClick}
+                style={{ ...btn, ...blueBtn }}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  const valid = await getPinSessionValid();
+                  if (valid) {
+                    setCardUnlocked(true);
+                    onExpand(item.id);
+                  } else setShowPinGate('view');
+                }}
               >
                 🔓 View
               </button>
             ) : (
-              <button style={s.btn} onClick={handleCardViewClick}>
+              <button
+                style={btn}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setCardUnlocked(false);
+                  onExpand(''); // collapse by passing empty id
+                  await chrome.storage.session.remove('cardPinVerifiedAt');
+                }}
+              >
                 🔒
               </button>
             )}
             <button
-              style={{ ...s.btn, ...s.danger }}
-              onClick={handleDeleteClick}
+              style={{ ...btn, color: '#60a5fa' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                openWebApp();
+              }}
+            >
+              Edit
+            </button>
+            <button
+              style={{ ...btn, color: '#f87171' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowPinGate('delete');
+              }}
             >
               🗑
             </button>
+            {cardUnlocked && (
+              <span style={chevron}>{expanded ? '▲' : '▼'}</span>
+            )}
           </div>
         </div>
-
-        {/* Unlocked details row */}
-        {cardUnlocked && (
-          <div
-            style={{
-              borderTop: '1px solid #1e293b',
-              padding: '10px 12px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-            }}
-          >
-            {/* Card fields */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {cardUnlocked && expanded && (
+          <div style={expandBody}>
+            <div style={fieldGrid}>
               {payload.cardholder && (
-                <span style={s.chip}>👤 {payload.cardholder}</span>
+                <Field label="Cardholder" value={payload.cardholder} />
               )}
               {payload.number && (
-                <span
-                  style={{
-                    ...s.chip,
-                    fontFamily: 'monospace',
-                    letterSpacing: 1,
-                  }}
-                >
-                  {payload.number.replace(/(.{4})/g, '$1 ').trim()}
-                </span>
+                <Field
+                  label="Card Number"
+                  value={payload.number.replace(/(.{4})/g, '$1 ').trim()}
+                />
               )}
               {payload.expiry && (
-                <span style={s.chip}>Exp: {payload.expiry}</span>
+                <Field label="Expiry" value={payload.expiry} />
               )}
-              {payload.cvv && <span style={s.chip}>CVV: {payload.cvv}</span>}
-            </div>
-            {/* Copy buttons */}
-            <div style={{ display: 'flex', gap: 6 }}>
-              {payload.number && (
-                <button
-                  style={{ ...s.btn, flex: 1 }}
-                  onClick={() => copy(payload.number!, 'num')}
-                >
-                  {copied === 'num' ? '✓ Copied' : 'Copy Number'}
-                </button>
-              )}
-              {payload.cvv && (
-                <button
-                  style={{ ...s.btn, flex: 1 }}
-                  onClick={() => copy(payload.cvv!, 'cvv')}
-                >
-                  {copied === 'cvv' ? '✓ Copied' : 'Copy CVV'}
-                </button>
+              {payload.cvv && <Field label="CVV" value={payload.cvv} secret />}
+              {payload.notes && (
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <Field label="Notes" value={payload.notes} />
+                </div>
               )}
             </div>
           </div>
@@ -389,64 +504,85 @@ export default function VaultItem({ item, onDeleted }: Props) {
   return null;
 }
 
-const s: Record<string, React.CSSProperties> = {
-  card: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    padding: '10px 12px',
-    borderRadius: 10,
-    background: '#0f172a',
-    border: '1px solid #1e293b',
-  },
-  iconBox: {
-    fontSize: 18,
-    flexShrink: 0,
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    background: '#1e293b',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  info: { overflow: 'hidden', minWidth: 0 },
-  title: {
-    fontSize: 13,
-    fontWeight: 600,
-    color: '#f1f5f9',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    margin: 0,
-  },
-  meta: {
-    fontSize: 11,
-    color: '#64748b',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    margin: '2px 0 0',
-  },
-  actions: { display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' },
-  btn: {
-    padding: '5px 9px',
-    borderRadius: 6,
-    border: 'none',
-    background: '#1e293b',
-    color: '#94a3b8',
-    fontSize: 12,
-    cursor: 'pointer',
-    fontWeight: 500,
-    whiteSpace: 'nowrap',
-  },
-  blue: { background: '#1e3a5f', color: '#38bdf8' },
-  danger: { background: '#1e293b', color: '#475569' },
-  chip: {
-    fontSize: 12,
-    color: '#94a3b8',
-    background: '#1e293b',
-    padding: '4px 8px',
-    borderRadius: 6,
-  },
+const card: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 10,
+  borderRadius: 10,
+  background: '#0f172a',
+  border: '1px solid #1e293b',
+};
+const header: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '10px 12px',
+  cursor: 'pointer',
+  width: '100%',
+  minHeight: 50,
+};
+const iconBox: React.CSSProperties = {
+  fontSize: 16,
+  flexShrink: 0,
+  width: 32,
+  height: 32,
+  borderRadius: 7,
+  background: '#1e293b',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+const infoCol: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+};
+const titleStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  color: '#f1f5f9',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  margin: 0,
+};
+const metaStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: '#64748b',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  margin: '2px 0 0',
+};
+const createdStyle: React.CSSProperties = { color: '#3b82f6', fontSize: 10 };
+const actRow: React.CSSProperties = {
+  display: 'flex',
+  gap: 4,
+  alignItems: 'center',
+  flexShrink: 0,
+};
+const chevron: React.CSSProperties = {
+  color: '#334155',
+  fontSize: 10,
+  userSelect: 'none',
+};
+const blueBtn: React.CSSProperties = {
+  background: '#1e3a5f',
+  color: '#38bdf8',
+};
+const expandBody: React.CSSProperties = {
+  padding: '0 12px 12px',
+  borderTop: '1px solid #1e293b',
+  width: '100%',
+};
+const fieldGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 8,
+  paddingTop: 10,
+};
+const pwAgeStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: '#64748b',
+  margin: '8px 0 0',
 };

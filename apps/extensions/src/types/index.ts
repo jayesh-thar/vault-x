@@ -25,6 +25,7 @@ export interface ItemPayload {
   notes?: string;
   favorite?: boolean;
   tags?: string[];
+  passwordChangedAt?: string;
 }
 
 // VaultItem + decrypted payload combined — what the popup actually uses
@@ -32,6 +33,7 @@ export interface DecryptedItem {
   id: string;
   type: 'login' | 'note' | 'card';
   category: string | null;
+  created_at?: string;
   payload: ItemPayload;
 }
 
