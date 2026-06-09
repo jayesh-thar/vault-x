@@ -3,6 +3,7 @@ import { MSG } from '../../lib/messages';
 import type {
   GetVaultItemsResponse,
   CheckSessionResponse,
+  SaveFormFieldsRequest,
 } from '../../lib/messages';
 import type { DecryptedItem } from '../../types';
 import VaultItem from '../components/VaultItem';
@@ -24,6 +25,13 @@ export default function Vault({ onLogout }: Props) {
   const profileRef = useRef<HTMLDivElement>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [autoSave, setAutoSave] = useState(false);
+  const [pendingCred, setPendingCred] = useState<{
+    title: string;
+    domain: string;
+    url: string;
+    fields: Array<{ name: string; value: string; label: string }>;
+    expiresAt: number;
+  } | null>(null);
 
   useEffect(() => {
     loadItems();
@@ -31,6 +39,17 @@ export default function Vault({ onLogout }: Props) {
       .sendMessage<object, CheckSessionResponse>({ type: MSG.CHECK_SESSION })
       .then((res) => {
         if (res.email) setEmail(res.email);
+      });
+    // Load auto-save preference
+    chrome.storage.local.get('vaultx_autosave').then((r) => {
+      setAutoSave(r.vaultx_autosave === true);
+    });
+
+    // Check for pending credential
+    chrome.runtime
+      .sendMessage({ type: MSG.GET_PENDING_CREDENTIAL })
+      .then((res: any) => {
+        if (res) setPendingCred(res);
       });
   }, []);
 
@@ -46,10 +65,6 @@ export default function Vault({ onLogout }: Props) {
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
-
-  chrome.storage.local.get('vaultx_autosave').then((r) => {
-    setAutoSave(r.vaultx_autosave === true);
-  });
 
   async function toggleAutoSave() {
     const newVal = !autoSave;
@@ -309,6 +324,118 @@ export default function Vault({ onLogout }: Props) {
           </button>
         ))}
       </div>
+      {/* pending banner */}
+      {pendingCred && (
+        <div
+          style={{
+            background: '#1e3a5f',
+            border: '1px solid #3b82f6',
+            borderRadius: 10,
+            padding: '10px 12px',
+            marginBottom: 4,
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 8,
+            }}
+          >
+            <span style={{ fontSize: 14 }}>💾</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: '#f1f5f9',
+                  margin: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Unsaved: {pendingCred.title}
+              </p>
+              <p style={{ fontSize: 10, color: '#64748b', margin: '2px 0 0' }}>
+                {pendingCred.domain} · expires in{' '}
+                {Math.max(
+                  0,
+                  Math.round((pendingCred.expiresAt - Date.now()) / 60000)
+                )}
+                m
+              </p>
+            </div>
+            <button
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#475569',
+                cursor: 'pointer',
+                fontSize: 12,
+              }}
+              onClick={async () => {
+                await chrome.runtime.sendMessage({
+                  type: MSG.CLEAR_PENDING_CREDENTIAL,
+                });
+                setPendingCred(null);
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              style={{
+                flex: 1,
+                padding: '6px 0',
+                borderRadius: 6,
+                border: 'none',
+                background: '#3b82f6',
+                color: '#fff',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+              onClick={async () => {
+                await chrome.runtime.sendMessage({
+                  type: MSG.SAVE_FORM_FIELDS,
+                  payload: { ...pendingCred, forceSave: true },
+                } satisfies SaveFormFieldsRequest);
+                await chrome.runtime.sendMessage({
+                  type: MSG.CLEAR_PENDING_CREDENTIAL,
+                });
+                setPendingCred(null);
+                isFetchingRef.current = false;
+                loadItems();
+              }}
+            >
+              Save to VaultX
+            </button>
+            <button
+              style={{
+                flex: 1,
+                padding: '6px 0',
+                borderRadius: 6,
+                border: '1px solid #334155',
+                background: 'transparent',
+                color: '#64748b',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+              onClick={async () => {
+                await chrome.runtime.sendMessage({
+                  type: 'CLEAR_PENDING_CREDENTIAL',
+                });
+                setPendingCred(null);
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Items — scrollable */}
       <div style={s.list}>

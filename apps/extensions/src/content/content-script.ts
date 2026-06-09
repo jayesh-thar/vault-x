@@ -275,11 +275,25 @@ function showSaveBanner(
   document.body.appendChild(banner);
 
   document
-    .getElementById('vaultx-banner-close')
-    ?.addEventListener('click', () => banner.remove());
-  document
     .getElementById('vaultx-banner-ignore')
-    ?.addEventListener('click', () => banner.remove());
+    ?.addEventListener('click', async () => {
+      banner.remove();
+      // Save to pending queue — user can recover from extension within 10 min
+      await chrome.runtime.sendMessage({
+        type: 'SAVE_PENDING_CREDENTIAL',
+        payload: { fields, domain, title, url: window.location.href },
+      });
+    });
+
+  document
+    .getElementById('vaultx-banner-close')
+    ?.addEventListener('click', async () => {
+      banner.remove();
+      await chrome.runtime.sendMessage({
+        type: 'SAVE_PENDING_CREDENTIAL',
+        payload: { fields, domain, title, url: window.location.href },
+      });
+    });
   document
     .getElementById('vaultx-banner-save')
     ?.addEventListener('click', async () => {

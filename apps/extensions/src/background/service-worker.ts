@@ -14,6 +14,8 @@ import type {
   SetCardPinResponse,
   CheckCardPinExistsResponse,
   CheckHasCardsResponse,
+  GoogleAuthResponse,
+  GoogleUnlockResponse,
 } from '../lib/messages';
 import type {
   SessionData,
@@ -86,10 +88,17 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
     case MSG.GOOGLE_AUTH:
       return handleGoogleAuth();
     case MSG.GOOGLE_UNLOCK:
-      return;
-      handleGoogleUnlock(msg.payload);
-    case 'SAVE_FORM_FIELDS':
-      return handleSaveFormFields(msg.payload);
+      return handleGoogleUnlock(msg.payload);
+    case MSG.SAVE_FORM_FIELDS:
+      return handleSaveFormFields((msg as any).payload);
+    case MSG.GET_PENDING_CREDENTIAL:
+      return getPendingCredential();
+    case MSG.CLEAR_PENDING_CREDENTIAL:
+      await chrome.storage.session.remove('pendingCredential');
+      return { success: true };
+    case MSG.SAVE_PENDING_CREDENTIAL:
+      await savePendingCredential((msg as any).payload);
+      return { success: true };
     default:
       return { success: false, error: 'Unknown message type' };
   }
@@ -194,7 +203,7 @@ async function handleGetVaultItems(): Promise<GetVaultItemsResponse> {
     ) as Uint8Array<ArrayBuffer>;
 
     const decrypted: DecryptedItem[] = await Promise.all(
-      items.map(async (item) => {
+      uniqueItems.map(async (item) => {
         const plaintext = await decrypt(
           { ciphertext: item.encrypted_data, iv: item.iv },
           masterKey
@@ -346,7 +355,8 @@ async function handleCheckHasCards(): Promise<CheckHasCardsResponse> {
   return { hasCards: vaultRes.items.some((i) => i.type === 'card') };
 }
 
-const GOOGLE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com';
+declare const __GOOGLE_CLIENT_ID__: string;
+const GOOGLE_CLIENT_ID = __GOOGLE_CLIENT_ID__;
 
 async function handleGoogleAuth(): Promise<GoogleAuthResponse> {
   try {
@@ -491,16 +501,15 @@ async function handleSaveFormFields(payload: {
   domain: string;
   title: string;
   url: string;
-  forcesSave?: boolean;
+  forceSave?: boolean;
 }): Promise<{ saved: boolean; autoSave: boolean }> {
   const session = await getSession();
   if (!session) return { saved: false, autoSave: false };
 
-  // Check auto-save preference (stored locally in chrome.storage.local)
   const prefs = await chrome.storage.local.get('vaultx_autosave');
   const autoSave = prefs.vaultx_autosave === true;
 
-  if (!autoSave && !payload.forcesSave) {
+  if (!autoSave && !payload.forceSave) {
     return { saved: false, autoSave: false };
   }
 
@@ -509,14 +518,16 @@ async function handleSaveFormFields(payload: {
       session.masterKey
     ) as Uint8Array<ArrayBuffer>;
 
-    // Build ItemPayload from captured fields
-    const itemPayload: Record<string, string> = {
-      title: payload.title || payload.domain,
-      url: payload.url,
-    };
+    // Map standard fields
+    const standard: Record<string, string> = {};
+    const customFields: Array<{
+      id: string;
+      label: string;
+      value: string;
+      type: string;
+    }> = [];
 
-    // Standard fields mapping
-    const standardFields = [
+    const standardKeys = [
       'email',
       'username',
       'password',
@@ -530,18 +541,11 @@ async function handleSaveFormFields(payload: {
       'birthdate',
     ];
 
-    const customFields: Array<{
-      id: string;
-      label: string;
-      value: string;
-      type: string;
-    }> = [];
-
     for (const field of payload.fields) {
-      if (standardFields.includes(field.name)) {
-        itemPayload[field.name] = field.value;
+      if (field.type === 'password' && !field.value) continue;
+      if (standardKeys.includes(field.name)) {
+        standard[field.name] = field.value;
       } else {
-        // Non-standard field → save as custom field
         customFields.push({
           id: crypto.randomUUID(),
           label: field.label || field.name,
@@ -551,11 +555,17 @@ async function handleSaveFormFields(payload: {
       }
     }
 
-    if (customFields.length > 0) {
-      itemPayload.customFields = JSON.stringify(customFields) as any;
-    }
-
-    itemPayload.passwordChangedAt = new Date().toISOString();
+    const itemPayload = {
+      title: payload.title || payload.domain,
+      url: payload.url,
+      username: standard.username || standard.email || '',
+      email: standard.email || '',
+      password: standard.password || '',
+      notes: '',
+      favorite: false,
+      passwordChangedAt: new Date().toISOString(),
+      customFields: customFields.length > 0 ? customFields : undefined,
+    };
 
     const { ciphertext, iv } = await encrypt(
       JSON.stringify(itemPayload),
@@ -565,17 +575,48 @@ async function handleSaveFormFields(payload: {
     await apiRequest('/api/vault/items', {
       method: 'POST',
       token: session.accessToken,
-      body: {
-        type: 'login',
-        encryptedData: ciphertext,
-        iv,
-        category: null,
-      },
+      body: { type: 'login', encryptedData: ciphertext, iv, category: null },
     });
 
     return { saved: true, autoSave };
   } catch (err) {
-    console.error('[VaultX] Save form fields error:', err);
+    console.error('[VaultX SW] Save form error:', err);
     return { saved: false, autoSave: false };
   }
+}
+
+async function savePendingCredential(payload: {
+  fields: Array<{ name: string; type: string; value: string; label: string }>;
+  domain: string;
+  title: string;
+  url: string;
+}): Promise<void> {
+  await chrome.storage.session.set({
+    pendingCredential: {
+      ...payload,
+      savedAt: Date.now(),
+      expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes
+    },
+  });
+}
+
+async function getPendingCredential() {
+  const r = await chrome.storage.session.get('pendingCredential');
+  const pending = r.pendingCredential as
+    | {
+        fields: any[];
+        domain: string;
+        title: string;
+        url: string;
+        savedAt: number;
+        expiresAt: number;
+      }
+    | undefined;
+
+  if (!pending) return null;
+  if (Date.now() > pending.expiresAt) {
+    await chrome.storage.session.remove('pendingCredential');
+    return null;
+  }
+  return pending;
 }

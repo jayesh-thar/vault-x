@@ -1,9 +1,5 @@
-// Every message has a 'type' string. Payload and response vary per message.
-// This file is the single source of truth for all inter-sandbox communication.
-
 import type { DecryptedItem } from '../types';
 
-// --- Message Types (string constants) ---
 export const MSG = {
   CHECK_SESSION: 'CHECK_SESSION',
   LOGIN: 'LOGIN',
@@ -19,9 +15,12 @@ export const MSG = {
   GOOGLE_AUTH: 'GOOGLE_AUTH',
   GOOGLE_UNLOCK: 'GOOGLE_UNLOCK',
   SAVE_FORM_FIELDS: 'SAVE_FORM_FIELDS',
+  GET_PENDING_CREDENTIAL: 'GET_PENDING_CREDENTIAL',
+  CLEAR_PENDING_CREDENTIAL: 'CLEAR_PENDING_CREDENTIAL',
+  SAVE_PENDING_CREDENTIAL: 'SAVE_PENDING_CREDENTIAL',
 } as const;
 
-// --- Request shapes (what the sender sends) ---
+// ── Request shapes ─────────────────────────────────────────────────────────
 export interface CheckSessionRequest {
   type: typeof MSG.CHECK_SESSION;
 }
@@ -43,7 +42,6 @@ export interface SaveCredentialsRequest {
   type: typeof MSG.SAVE_CREDENTIALS;
   payload: { title: string; username: string; password: string; url: string };
 }
-
 export interface CheckCardPinExistsRequest {
   type: typeof MSG.CHECK_CARD_PIN_EXISTS;
 }
@@ -55,47 +53,43 @@ export interface VerifyCardPinRequest {
   type: typeof MSG.VERIFY_CARD_PIN;
   payload: { pin: string };
 }
-
-export interface CheckCardPinExistsResponse {
-  exists: boolean;
-}
-export interface SetCardPinResponse {
-  success: boolean;
-  error?: string;
-}
-export interface VerifyCardPinResponse {
-  success: boolean;
-  error?: string;
-}
-
 export interface CheckHasCardsRequest {
   type: typeof MSG.CHECK_HAS_CARDS;
 }
-export interface CheckHasCardsResponse {
-  hasCards: boolean;
-}
-
 export interface GoogleAuthRequest {
   type: typeof MSG.GOOGLE_AUTH;
 }
-export interface GoogleAuthResponse {
-  success: boolean;
-  isNewUser?: boolean;
-  email?: string;
-  error?: string;
-  // For existing users who need master password
-  needsMasterPassword?: boolean;
-}
-
 export interface GoogleUnlockRequest {
   type: typeof MSG.GOOGLE_UNLOCK;
   payload: { password: string };
 }
-export interface GoogleUnlockResponse {
-  success: boolean;
-  error?: string;
+export interface SaveFormFieldsRequest {
+  type: typeof MSG.SAVE_FORM_FIELDS;
+  payload: {
+    fields: Array<{ name: string; type: string; value: string; label: string }>;
+    domain: string;
+    title: string;
+    url: string;
+    forceSave?: boolean;
+  };
+}
+export interface GetPendingCredentialRequest {
+  type: typeof MSG.GET_PENDING_CREDENTIAL;
+}
+export interface ClearPendingCredentialRequest {
+  type: typeof MSG.CLEAR_PENDING_CREDENTIAL;
+}
+export interface SavePendingCredentialRequest {
+  type: typeof MSG.SAVE_PENDING_CREDENTIAL;
+  payload: {
+    fields: Array<{ name: string; type: string; value: string; label: string }>;
+    domain: string;
+    title: string;
+    url: string;
+  };
 }
 
+// ── Union — ALL messages must be here ──────────────────────────────────────
 export type ExtensionMessage =
   | CheckSessionRequest
   | LoginRequest
@@ -108,9 +102,13 @@ export type ExtensionMessage =
   | VerifyCardPinRequest
   | CheckHasCardsRequest
   | GoogleAuthRequest
-  | GoogleUnlockRequest;
+  | GoogleUnlockRequest
+  | SaveFormFieldsRequest
+  | GetPendingCredentialRequest
+  | ClearPendingCredentialRequest
+  | SavePendingCredentialRequest;
 
-// --- Response shapes (what the service worker sends back) ---
+// ── Response shapes ────────────────────────────────────────────────────────
 export interface CheckSessionResponse {
   isLoggedIn: boolean;
   email?: string;
@@ -133,4 +131,33 @@ export interface GetItemsForDomainResponse {
 export interface SaveCredentialsResponse {
   success: boolean;
   error?: string;
+}
+export interface CheckCardPinExistsResponse {
+  exists: boolean;
+}
+export interface SetCardPinResponse {
+  success: boolean;
+  error?: string;
+}
+export interface VerifyCardPinResponse {
+  success: boolean;
+  error?: string;
+}
+export interface CheckHasCardsResponse {
+  hasCards: boolean;
+}
+export interface GoogleAuthResponse {
+  success: boolean;
+  isNewUser?: boolean;
+  needsMasterPassword?: boolean;
+  email?: string;
+  error?: string;
+}
+export interface GoogleUnlockResponse {
+  success: boolean;
+  error?: string;
+}
+export interface SaveFormFieldsResponse {
+  saved: boolean;
+  autoSave: boolean;
 }
