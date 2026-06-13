@@ -18,6 +18,7 @@ import {
   resetCardPin,
   resetCardPinWithOtp,
   googleExtensionAuth,
+  googleUnlockSession,
 } from './auth.controller';
 import { authenticate } from '../../middleware/authenticate';
 import { validateEmailDomain } from '../../middleware/emailValidator';
@@ -29,11 +30,6 @@ import {
 import { hibpCheck } from '../../middleware/hibp';
 import { googleAuth, googleCallback, googleSetupComplete } from './auth.google';
 import { sendOTP, verifyOTP } from './auth.otp';
-import {
-  requestPasswordReset,
-  verifyResetToken,
-  completePasswordReset,
-} from './auth.reset';
 
 const router = Router();
 
@@ -66,5 +62,6 @@ router.post('/card-pin/verify', authenticate, verifyCardPin);
 router.delete('/card-pin', authenticate, resetCardPin);
 router.post('/card-pin/reset-with-otp', authenticate, resetCardPinWithOtp);
 router.post('/google/extension', googleExtensionAuth);
+router.post('/google/unlock-session', googleUnlockSession);
 
 export default router;

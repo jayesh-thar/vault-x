@@ -17,6 +17,12 @@ import {
   forgotPasswordEmail,
   passwordChangedEmail,
 } from '../../utils/emailTemplates';
+import {
+  generateSecureId,
+  hashToken,
+  signAccessToken,
+  signRefreshToken,
+} from '../../utils/jwt';
 
 const COOKIE_OPTIONS = {
   httpOnly: true, // JS can't read this cookie
@@ -301,10 +307,6 @@ export async function forgotPasswordReset(
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query(
-        'DELETE FROM vault_items WHERE vault_id IN (SELECT id FROM vaults WHERE user_id = $1)',
-        [userId]
-      );
 
       // Update credentials with new password
       const { hashAuthKey } = await import('../../utils/hash.js');
@@ -635,5 +637,71 @@ export async function googleExtensionAuth(
   } catch (err) {
     console.error('googleExtensionAuth error:', err);
     res.status(500).json({ error: 'Google authentication failed' });
+  }
+}
+
+// Google users: re-establish session after entering vault password.
+// No authKey verification — Google OAuth already proved identity.
+// We just need to issue a new access/refresh token and return vault encryption data.
+export async function googleUnlockSession(
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const { userId } = req.body;
+    if (!userId) {
+      res.status(400).json({ error: 'userId required' });
+      return;
+    }
+
+    const userRow = await pool.query(
+      'SELECT id, email, kdf_salt, kdf_params, vault_key_enc, vault_key_iv, google_id FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (userRow.rows.length === 0 || !userRow.rows[0].google_id) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const user = userRow.rows[0];
+
+    const sessionId = generateSecureId();
+    const accessToken = signAccessToken({ userId: user.id, sessionId });
+    const refreshToken = signRefreshToken({ userId: user.id, sessionId });
+    const refreshTokenHash = hashToken(refreshToken);
+
+    await pool.query(
+      `INSERT INTO sessions (user_id, refresh_token_hash, device_info, expires_at)
+       VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')`,
+      [
+        user.id,
+        refreshTokenHash,
+        JSON.stringify({ userAgent: req.headers['user-agent'] }),
+      ]
+    );
+
+    res.cookie('refreshToken', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.json({
+      accessToken,
+      userId: user.id,
+      email: user.email,
+      kdfSalt: user.kdf_salt,
+      kdfParams:
+        typeof user.kdf_params === 'string'
+          ? JSON.parse(user.kdf_params)
+          : user.kdf_params,
+      vaultKeyEnc: user.vault_key_enc,
+      vaultKeyIv: user.vault_key_iv,
+    });
+  } catch (err) {
+    console.error('googleUnlockSession error:', err);
+    res.status(500).json({ error: 'Failed to unlock' });
   }
 }

@@ -4,7 +4,7 @@ import { pool } from '../../db/pool';
 export async function getProfile(req: Request, res: Response): Promise<void> {
   try {
     const result = await pool.query(
-      'SELECT email, display_name, profile_photo, created_at FROM users WHERE id = $1',
+      'SELECT email, display_name, profile_photo, vault_key_enc, vault_key_iv FROM users WHERE id = $1',
       [req.user!.userId]
     );
     if (result.rows.length === 0) {

@@ -7,7 +7,8 @@ dotenv.config();
 // We just need to not override it with conflicting options.
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // Don't add ssl: {} here — Neon's connection string handles it
+  max: 10, // cap concurrent connections
+  idleTimeoutMillis: 30000,
 });
 
 pool.on('connect', () => {

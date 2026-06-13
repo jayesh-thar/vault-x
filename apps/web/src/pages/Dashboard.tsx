@@ -364,9 +364,13 @@ export default function Dashboard() {
   }, [fetchItems]);
 
   useEffect(() => {
+    let lastFetch = Date.now();
     function handleVisibilityChange() {
-      if (document.visibilityState === 'visible') {
-        // Re-fetch when tab becomes active again
+      if (
+        document.visibilityState === 'visible' &&
+        Date.now() - lastFetch > 30000
+      ) {
+        lastFetch = Date.now();
         void fetchItems();
       }
     }

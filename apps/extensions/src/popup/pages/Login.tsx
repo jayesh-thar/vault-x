@@ -10,7 +10,7 @@ interface Props {
   onLoginSuccess: () => void;
 }
 
-type View = 'main' | 'google_unlock' | 'google_register';
+type View = 'main' | 'google_unlock' | 'google_register' | 'forgot';
 
 export default function Login({ onLoginSuccess }: Props) {
   const [view, setView] = useState<View>('main');
@@ -22,6 +22,12 @@ export default function Login({ onLoginSuccess }: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [view2, setView2] = useState<
+    'main' | 'google_unlock' | 'google_register' | 'forgot'
+  >('main');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotSent, setForgotSent] = useState(false);
+  const [forgotLoading, setForgotLoading] = useState(false);
 
   // ── Email login ──────────────────────────────────────────────────────────
   async function handleLogin() {
@@ -127,6 +133,142 @@ export default function Login({ onLoginSuccess }: Props) {
     setView('main');
   }
 
+  async function handleForgotPassword() {
+    const normalized = forgotEmail.toLowerCase().trim();
+    if (!normalized) {
+      setError('Enter your email');
+      return;
+    }
+    setForgotLoading(true);
+    setError('');
+    try {
+      const res = await fetch(
+        'http://localhost:5000/api/auth/forgot-password/send-otp',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: normalized }),
+        }
+      );
+      if (res.ok) setForgotSent(true);
+      else setError('Failed to send. Try again.');
+    } catch {
+      setError('Network error. Check your connection.');
+    } finally {
+      setForgotLoading(false);
+    }
+  }
+
+  // ── Forgot password screen ────────────────────────────────────────────────
+  if (view === 'forgot') {
+    return (
+      <div style={s.page}>
+        <div style={s.header}>
+          <div style={{ fontSize: 32 }}>🔐</div>
+          <h1 style={s.title}>VaultX</h1>
+          <p style={s.sub}>Reset master password</p>
+        </div>
+        <div style={s.card}>
+          {forgotSent ? (
+            <>
+              <p
+                style={{
+                  fontSize: 13,
+                  color: '#94a3b8',
+                  lineHeight: 1.6,
+                  margin: 0,
+                }}
+              >
+                A reset code has been sent to{' '}
+                <strong style={{ color: '#f1f5f9' }}>{forgotEmail}</strong> (if
+                an account exists).
+              </p>
+              <p
+                style={{
+                  fontSize: 11,
+                  color: '#f87171',
+                  lineHeight: 1.5,
+                  margin: 0,
+                }}
+              >
+                ⚠ Resetting will make existing vault items permanently
+                unreadable (zero-knowledge — we can't migrate them without your
+                old password).
+              </p>
+              <button
+                style={s.btn}
+                onClick={() =>
+                  chrome.tabs.create({
+                    url: 'http://localhost:5173/forgot-password',
+                  })
+                }
+              >
+                Continue reset in browser →
+              </button>
+              <p
+                style={{
+                  fontSize: 11,
+                  color: '#64748b',
+                  textAlign: 'center',
+                  margin: 0,
+                }}
+              >
+                After resetting, come back and click the VaultX icon to log in.
+              </p>
+              <button
+                style={s.backBtn}
+                onClick={() => {
+                  setView('main');
+                  setForgotSent(false);
+                  setForgotEmail('');
+                  setError('');
+                }}
+              >
+                ← Back to login
+              </button>
+            </>
+          ) : (
+            <>
+              <p style={{ fontSize: 12, color: '#64748b', margin: 0 }}>
+                Enter your account email. We'll send a reset code you can use on
+                the VaultX website.
+              </p>
+              <div style={s.field}>
+                <label style={s.label}>Email</label>
+                <input
+                  style={s.input}
+                  type="email"
+                  placeholder="you@example.com"
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleForgotPassword()}
+                  autoFocus
+                />
+              </div>
+              {error && <div style={s.errorBox}>⚠ {error}</div>}
+              <button
+                style={{ ...s.btn, opacity: forgotLoading ? 0.7 : 1 }}
+                onClick={handleForgotPassword}
+                disabled={forgotLoading}
+              >
+                {forgotLoading ? 'Sending...' : 'Send reset code'}
+              </button>
+              <button
+                style={s.backBtn}
+                onClick={() => {
+                  setView('main');
+                  setError('');
+                }}
+              >
+                ← Back to login
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ── Google unlock screen ─────────────────────────────────────────────────
   if (view === 'google_unlock') {
     return (
@@ -162,6 +304,15 @@ export default function Login({ onLoginSuccess }: Props) {
           <p style={{ fontSize: 12, color: '#64748b', margin: 0 }}>
             Enter your master password to decrypt your vault.
           </p>
+          <button
+            style={{ ...s.backBtn, alignSelf: 'flex-end', textAlign: 'right' }}
+            onClick={() => {
+              setView('forgot');
+              setError('');
+            }}
+          >
+            Forgot password?
+          </button>
           <div style={s.field}>
             <label style={s.label}>Master Password</label>
             <input

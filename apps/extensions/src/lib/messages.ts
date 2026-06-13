@@ -18,6 +18,7 @@ export const MSG = {
   GET_PENDING_CREDENTIAL: 'GET_PENDING_CREDENTIAL',
   CLEAR_PENDING_CREDENTIAL: 'CLEAR_PENDING_CREDENTIAL',
   SAVE_PENDING_CREDENTIAL: 'SAVE_PENDING_CREDENTIAL',
+  REUNLOCK: 'REUNLOCK',
 } as const;
 
 // ── Request shapes ─────────────────────────────────────────────────────────
@@ -63,6 +64,10 @@ export interface GoogleUnlockRequest {
   type: typeof MSG.GOOGLE_UNLOCK;
   payload: { password: string };
 }
+export interface ReunlockRequest {
+  type: typeof MSG.REUNLOCK;
+  payload: { password: string };
+}
 export interface SaveFormFieldsRequest {
   type: typeof MSG.SAVE_FORM_FIELDS;
   payload: {
@@ -106,12 +111,14 @@ export type ExtensionMessage =
   | SaveFormFieldsRequest
   | GetPendingCredentialRequest
   | ClearPendingCredentialRequest
-  | SavePendingCredentialRequest;
+  | SavePendingCredentialRequest
+  | ReunlockRequest;
 
 // ── Response shapes ────────────────────────────────────────────────────────
 export interface CheckSessionResponse {
   isLoggedIn: boolean;
   email?: string;
+  needsUnlock?: boolean;
 }
 export interface LoginResponse {
   success: boolean;

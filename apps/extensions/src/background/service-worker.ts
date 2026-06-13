@@ -48,16 +48,45 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // same browser session. Cleared when browser closes. Perfect for masterKey.
 
 async function saveSession(data: SessionData): Promise<void> {
-  await chrome.storage.session.set({ session: data });
+  // masterKey stays in memory-only session storage
+  await chrome.storage.session.set({
+    session: { masterKey: data.masterKey, email: data.email },
+  });
+  // accessToken persists in local storage for refresh-on-restart
+  await chrome.storage.local.set({
+    persistedAuth: { accessToken: data.accessToken, email: data.email },
+  });
 }
 
 async function getSession(): Promise<SessionData | null> {
   const result = await chrome.storage.session.get('session');
-  return (result.session as SessionData) ?? null;
+  const session = result.session as
+    | { masterKey: number[]; email: string }
+    | undefined;
+
+  if (session?.masterKey) {
+    // masterKey present in memory — fully unlocked
+    const persisted = await chrome.storage.local.get('persistedAuth');
+    const accessToken = persisted.persistedAuth?.accessToken;
+    if (!accessToken) return null;
+    return { masterKey: session.masterKey, accessToken, email: session.email };
+  }
+
+  return null;
 }
 
 async function clearSession(): Promise<void> {
   await chrome.storage.session.remove('session');
+  await chrome.storage.local.remove('persistedAuth');
+}
+
+// check if we have a persisted login (browser restarted, masterKey lost)
+async function hasPersistedAuth(): Promise<{ email: string } | null> {
+  const persisted = await chrome.storage.local.get('persistedAuth');
+  if (persisted.persistedAuth?.accessToken) {
+    return { email: persisted.persistedAuth.email };
+  }
+  return null;
 }
 
 // ─── Message Router ───────────────────────────────────────────────────────────
@@ -118,6 +147,8 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
     case MSG.SAVE_PENDING_CREDENTIAL:
       await savePendingCredential((msg as any).payload);
       return { success: true };
+    case MSG.REUNLOCK:
+      return handleReunlock(msg.payload);
     default:
       return { success: false, error: 'Unknown message type' };
   }
@@ -125,10 +156,19 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
-async function handleCheckSession(): Promise<CheckSessionResponse> {
+async function handleCheckSession(): Promise<
+  CheckSessionResponse & { needsUnlock?: boolean }
+> {
   const session = await getSession();
-  if (!session) return { isLoggedIn: false };
-  return { isLoggedIn: true, email: session.email };
+  if (session) return { isLoggedIn: true, email: session.email };
+
+  // Browser restarted — masterKey lost but token persisted
+  const persisted = await hasPersistedAuth();
+  if (persisted) {
+    return { isLoggedIn: false, needsUnlock: true, email: persisted.email };
+  }
+
+  return { isLoggedIn: false };
 }
 
 async function handleLogin(payload: {
@@ -190,6 +230,59 @@ async function handleLogin(payload: {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Login failed';
     return { success: false, error: message };
+  }
+}
+
+async function handleReunlock(payload: {
+  password: string;
+}): Promise<LoginResponse> {
+  const persisted = await chrome.storage.local.get('persistedAuth');
+  const email = persisted.persistedAuth?.email;
+  const accessToken = persisted.persistedAuth?.accessToken;
+
+  if (!email || !accessToken) {
+    return { success: false, error: 'No saved session. Please log in.' };
+  }
+
+  try {
+    const prelogin = await apiRequest<{
+      kdfSalt: string;
+      kdfParams: { iterations: number; memory: number; parallelism: number };
+    }>('/api/auth/prelogin', { method: 'POST', body: { email } });
+
+    const { vaultKey } = await deriveKeys(
+      payload.password,
+      prelogin.kdfSalt,
+      prelogin.kdfParams
+    );
+
+    // Get current vault_key_enc/iv from profile (works even if accessToken expired —
+    // apiRequest auto-refreshes on 401)
+    const profileRes = await apiRequest<{
+      vault_key_enc: string;
+      vault_key_iv: string;
+    }>('/api/user/profile', { token: accessToken });
+
+    const masterKeyBytes = await decryptBytes(
+      { ciphertext: profileRes.vault_key_enc, iv: profileRes.vault_key_iv },
+      vaultKey
+    );
+
+    if (masterKeyBytes.length !== 32) {
+      return { success: false, error: 'Incorrect master password' };
+    }
+
+    // Restore masterKey into memory-only session storage
+    await chrome.storage.session.set({
+      session: { masterKey: Array.from(masterKeyBytes), email },
+    });
+
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Incorrect master password',
+    };
   }
 }
 

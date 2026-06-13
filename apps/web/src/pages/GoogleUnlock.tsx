@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { deriveKeys, toHex } from '../lib/kdf';
+import { deriveKeys } from '../lib/kdf';
 import { decryptBytes } from '../lib/crypto';
 import { saveSession } from '../lib/storage';
 import { useVaultStore } from '../store/useVaultStore';
@@ -25,30 +25,31 @@ export default function GoogleUnlock() {
     setLoading(true);
     setError('');
     try {
-      // Get KDF params for this email
-      const { data: kdfData } = await api.post('/api/auth/prelogin', { email });
-
-      // Derive keys
-      const { authKey, vaultKey: derivedKey } = await deriveKeys(
-        password,
-        kdfData.kdfSalt,
-        kdfData.kdfParams
-      );
-
-      // Login
-      const { data } = await api.post('/api/auth/login', {
-        email,
-        authKey: toHex(authKey),
+      // Step 1: Get session + encrypted vault key for this Google user
+      // No authKey needed — Google already proved identity
+      const { data } = await api.post('/api/auth/google/unlock-session', {
+        userId,
       });
 
-      // Decrypt master key
+      // Step 2: Derive vaultKey from the entered password + this user's kdfSalt
+      const { vaultKey: derivedKey } = await deriveKeys(
+        password,
+        data.kdfSalt,
+        data.kdfParams
+      );
+
+      // Step 3: Decrypt the masterKey locally — wrong password = decrypt throws
       const masterKey = await decryptBytes(
         { ciphertext: data.vaultKeyEnc, iv: data.vaultKeyIv },
         derivedKey
       );
 
+      if (masterKey.length !== 32) {
+        throw new Error('Incorrect password');
+      }
+
       saveSession({
-        email,
+        email: data.email,
         userId: data.userId,
         kdfSalt: data.kdfSalt,
         kdfParams: data.kdfParams,
@@ -171,16 +172,15 @@ export default function GoogleUnlock() {
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
               aria-label="Vault password"
+              placeholder="Enter your vault password"
               className="w-full rounded-lg px-3 py-2.5 text-sm outline-none vx-input"
               style={{
                 background: 'var(--bg-elevated)',
                 border: '0.5px solid var(--border)',
                 color: 'var(--text-primary)',
               }}
-              placeholder="Enter your vault password"
               autoFocus
             />
-
             <button
               onClick={handleUnlock}
               disabled={loading}
@@ -193,7 +193,6 @@ export default function GoogleUnlock() {
             >
               {loading ? 'Unlocking...' : 'Unlock vault'}
             </button>
-
             <p
               className="text-xs text-center"
               style={{ color: 'var(--text-muted)' }}

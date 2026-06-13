@@ -171,13 +171,6 @@ export default function Login() {
               >
                 Master Password
               </label>
-              <Link
-                to="/forgot-password"
-                className="text-xs"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Forgot password?
-              </Link>
             </div>
             <div className="relative">
               <input

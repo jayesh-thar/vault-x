@@ -2172,7 +2172,7 @@ function CardPinReset() {
         </div>
       )}
 
-      {step === 'check' && step !== 'done' && (
+      {step === 'check' && (
         <div className="flex flex-col gap-3">
           <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
             {pinExists

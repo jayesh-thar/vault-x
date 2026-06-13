@@ -28,7 +28,6 @@ function getStrength(p: string) {
 
 export default function ForgotPassword() {
   const navigate = useNavigate();
-  const { setAuth, setVaultKey } = useVaultStore();
 
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
@@ -280,10 +279,10 @@ export default function ForgotPassword() {
                 ⚠ Important — read before continuing
               </p>
               <p>
-                Resetting your master password will{' '}
-                <strong>permanently delete all your saved passwords</strong>.
-                This is because VaultX is zero-knowledge — your vault can only
-                be decrypted with your old master password.
+                Resetting your master password will make all your saved items{' '}
+                <strong>permanently unreadable</strong> — VaultX cannot decrypt
+                them without your old password (zero-knowledge architecture).
+                Your vault will appear empty after reset.
               </p>
               <p className="mt-1">
                 If you remember your password,{' '}
