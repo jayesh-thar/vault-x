@@ -59,6 +59,9 @@ export async function registerUser(input: RegisterInput) {
     kdfParams,
     vaultKeyEnc,
     vaultKeyIv,
+    recoveryKeyEnc,
+    recoveryKeyIv,
+    recoveryKeyDisplay,
   } = input;
 
   const existing = await pool.query('SELECT id FROM users WHERE email = $1', [
@@ -77,8 +80,8 @@ export async function registerUser(input: RegisterInput) {
     await client.query('BEGIN');
 
     const userResult = await client.query(
-      `INSERT INTO users (email, auth_hash, auth_salt, kdf_salt, kdf_params, vault_key_enc, vault_key_iv)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      `INSERT INTO users (email, auth_hash, auth_salt, kdf_salt, kdf_params, vault_key_enc, vault_key_iv, recovery_key_enc, recovery_key_iv)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
       [
         email.toLowerCase().trim(),
         authHash,
@@ -87,6 +90,8 @@ export async function registerUser(input: RegisterInput) {
         JSON.stringify(kdfParams),
         vaultKeyEnc,
         vaultKeyIv,
+        recoveryKeyEnc,
+        recoveryKeyIv,
       ]
     );
 
@@ -106,6 +111,21 @@ export async function registerUser(input: RegisterInput) {
       to: email,
       subject: 'Welcome to VaultX 🔐',
       html: welcomeEmail(email.split('@')[0], email),
+    }).catch(() => {});
+
+    sendEmail({
+      to: email,
+      subject: 'VaultX — Your account recovery key',
+      html: `
+        <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto;">
+          <h2 style="color: #10b981;">Your VaultX Recovery Key</h2>
+          <p>Save this recovery key somewhere safe. It's the ONLY way to recover your vault if you forget your master password.</p>
+          <p style="font-family: monospace; font-size: 16px; background: #f3f4f6; padding: 12px; border-radius: 8px; letter-spacing: 1px;">
+            ${recoveryKeyDisplay}
+          </p>
+          <p style="color: #666; font-size: 12px;">Do not share this key with anyone. VaultX staff will never ask for it. We've also let you download a copy of this key.</p>
+        </div>
+      `,
     }).catch(() => {});
 
     return { userId, ...tokens };

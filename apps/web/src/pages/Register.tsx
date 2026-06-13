@@ -8,7 +8,12 @@ import {
   toHex,
   DEFAULT_KDF_PARAMS,
 } from '../lib/kdf';
-import { encryptBytes, generateVaultKey } from '../lib/crypto';
+import {
+  encryptBytes,
+  generateRecoveryKey,
+  generateVaultKey,
+  recoveryKeyToString,
+} from '../lib/crypto';
 import { useVaultStore } from '../store/useVaultStore';
 import { saveKdfLocally, saveSession } from '../lib/storage';
 
@@ -71,17 +76,43 @@ export default function Register() {
       );
       const normalizedEmail = email.toLowerCase().trim();
 
+      const recoveryKey = generateRecoveryKey();
+      const { ciphertext: recoveryKeyEnc, iv: recoveryKeyIv } =
+        await encryptBytes(masterKey, recoveryKey);
+
+      const recoveryString = recoveryKeyToString(recoveryKey);
+
       const { data } = await api.post<AuthResponse>('/api/auth/register', {
         email: normalizedEmail,
         authKey: toHex(authKey),
-        authSalt, // now a real hex string
+        authSalt,
         kdfSalt,
         kdfParams: DEFAULT_KDF_PARAMS,
         vaultKeyEnc,
         vaultKeyIv,
+        recoveryKeyEnc,
+        recoveryKeyIv,
+        recoveryKeyDisplay: recoveryString,
       });
 
+      // Trigger recovery key file download
+      const blob = new Blob(
+        [
+          `VaultX Recovery Key\n\nEmail: ${normalizedEmail}\nRecovery Key: ${recoveryString}\n\nKeep this safe. It's the ONLY way to recover your vault if you forget your master password.\nDo not share it with anyone. We've also emailed a copy to your registered email address.`,
+        ],
+        { type: 'text/plain' }
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `vaultx-recovery-key-${normalizedEmail.split('@')[0]}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
       setAuth(data.userId, data.accessToken);
+
       saveKdfLocally(normalizedEmail, kdfSalt, DEFAULT_KDF_PARAMS);
       setVaultKey(masterKey);
       saveSession({

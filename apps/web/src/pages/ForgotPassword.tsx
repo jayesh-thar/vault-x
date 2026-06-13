@@ -7,11 +7,14 @@ import {
   toHex,
   DEFAULT_KDF_PARAMS,
 } from '../lib/kdf';
-import { encryptBytes, generateVaultKey } from '../lib/crypto';
-import { saveSession } from '../lib/storage';
-import { useVaultStore } from '../store/useVaultStore';
+import {
+  decryptBytes,
+  encryptBytes,
+  generateVaultKey,
+  recoveryKeyFromString,
+} from '../lib/crypto';
 
-type Step = 'email' | 'otp' | 'newpass' | 'done';
+type Step = 'email' | 'otp' | 'recovery' | 'newpass' | 'done';
 
 function getStrength(p: string) {
   let s = 0;
@@ -41,14 +44,18 @@ export default function ForgotPassword() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [timerActive, setTimerActive] = useState(false);
+  const [recoveryKeyInput, setRecoveryKeyInput] = useState('');
+  const [recoveryFile, setRecoveryFile] = useState<File | null>(null);
+  const [recoveryMethod, setRecoveryMethod] = useState<'key' | 'otp' | null>(
+    null
+  );
 
   const otpCode = otpDigits.join('');
   const otpExpired = timerActive && otpTimer <= 0;
   const strength = newPass ? getStrength(newPass) : null;
 
-  // Timer countdown
   const startTimer = () => {
-    setOtpTimer(600); // 10 minutes
+    setOtpTimer(600);
     setTimerActive(true);
     const interval = setInterval(() => {
       setOtpTimer((prev) => {
@@ -62,7 +69,6 @@ export default function ForgotPassword() {
     }, 1000);
   };
 
-  // Step 1: Send OTP
   async function handleSendOTP() {
     if (!email.trim()) return setError('Enter your email address.');
     setLoading(true);
@@ -82,14 +88,12 @@ export default function ForgotPassword() {
     }
   }
 
-  // Step 2: Verify OTP → move to new password step
   async function handleVerifyOTP() {
     if (otpCode.length !== 6) return setError('Enter the 6-digit code.');
     setStep('newpass');
     setError('');
   }
 
-  // Step 3: Reset password + create new vault
   async function handleReset() {
     if (!newPass || !confirm) return setError('Fill in all fields.');
     if (newPass !== confirm) return setError('Passwords do not match.');
@@ -137,6 +141,75 @@ export default function ForgotPassword() {
     }
   }
 
+  async function handleRecoveryFileUpload(
+    e: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const match = text.match(/Recovery Key:\s*([0-9A-F-]+)/i);
+    if (match) {
+      setRecoveryKeyInput(match[1].trim());
+    } else {
+      setRecoveryKeyInput(text.trim());
+    }
+    setRecoveryFile(file);
+  }
+
+  async function handleRecoveryReset() {
+    if (!recoveryKeyInput.trim())
+      return setError('Enter or upload your recovery key.');
+    if (!newPass || !confirm) return setError('Fill in all password fields.');
+    if (newPass !== confirm) return setError('Passwords do not match.');
+    if (newPass.length < 12)
+      return setError('Password must be at least 12 characters.');
+
+    setLoading(true);
+    setError('');
+    try {
+      const recoveryKey = recoveryKeyFromString(recoveryKeyInput.trim());
+
+      const { data } = await api.get(
+        `/api/auth/forgot-password/recovery-data?email=${encodeURIComponent(email.toLowerCase().trim())}`
+      );
+
+      const masterKey = await decryptBytes(
+        { ciphertext: data.recovery_key_enc, iv: data.recovery_key_iv },
+        recoveryKey
+      );
+
+      if (masterKey.length !== 32) {
+        throw new Error('Invalid recovery key');
+      }
+
+      const newKdfSalt = await generateSalt();
+      const newAuthSalt = await generateSalt();
+      const { authKey: newAuthKey, vaultKey: newDerivedKey } = await deriveKeys(
+        newPass,
+        newKdfSalt,
+        DEFAULT_KDF_PARAMS
+      );
+      const { ciphertext: newVaultKeyEnc, iv: newVaultKeyIv } =
+        await encryptBytes(masterKey, newDerivedKey);
+
+      await api.post('/api/auth/forgot-password/recovery-key', {
+        email: email.toLowerCase().trim(),
+        newAuthKey: toHex(newAuthKey),
+        newAuthSalt,
+        newKdfSalt,
+        newKdfParams: DEFAULT_KDF_PARAMS,
+        newVaultKeyEnc,
+        newVaultKeyIv,
+      });
+
+      setStep('done');
+    } catch {
+      setError("Invalid recovery key or it doesn't match this account.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div
       className="min-h-screen flex items-center justify-center px-4"
@@ -149,7 +222,6 @@ export default function ForgotPassword() {
           border: '0.5px solid var(--border)',
         }}
       >
-        {/* Logo */}
         <div className="flex flex-col items-center mb-8">
           <div
             className="flex items-center justify-center w-12 h-12 rounded-xl mb-4"
@@ -194,7 +266,7 @@ export default function ForgotPassword() {
             const current =
               step === 'email'
                 ? 1
-                : step === 'otp'
+                : step === 'otp' || step === 'recovery'
                   ? 2
                   : step === 'newpass'
                     ? 3
@@ -253,7 +325,6 @@ export default function ForgotPassword() {
           })}
         </div>
 
-        {/* Error */}
         {error && (
           <div
             className="rounded-lg px-4 py-3 mb-4 text-sm"
@@ -263,10 +334,9 @@ export default function ForgotPassword() {
           </div>
         )}
 
-        {/* ─── Step 1: Email ─────────────────────────────────────── */}
+        {/* ─── Step 1: Email + method choice ────────────────────── */}
         {step === 'email' && (
           <div className="flex flex-col gap-4">
-            {/* Data loss warning */}
             <div
               className="rounded-lg p-3 text-xs"
               style={{
@@ -279,10 +349,10 @@ export default function ForgotPassword() {
                 ⚠ Important — read before continuing
               </p>
               <p>
-                Resetting your master password will make all your saved items{' '}
-                <strong>permanently unreadable</strong> — VaultX cannot decrypt
-                them without your old password (zero-knowledge architecture).
-                Your vault will appear empty after reset.
+                If you use the email-code method, your saved items will become{' '}
+                <strong>permanently unreadable</strong> (zero-knowledge — we
+                can't decrypt them without your old password). If you have a
+                recovery key, use it instead to keep your vault intact.
               </p>
               <p className="mt-1">
                 If you remember your password,{' '}
@@ -307,7 +377,6 @@ export default function ForgotPassword() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendOTP()}
                 placeholder="you@example.com"
                 disabled={loading}
                 className="w-full rounded-lg px-3 py-2.5 text-sm outline-none vx-input"
@@ -320,22 +389,90 @@ export default function ForgotPassword() {
               />
             </div>
 
+            <div>
+              <label
+                className="block text-xs font-medium mb-1.5"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                How do you want to reset?
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRecoveryMethod('key')}
+                  className="flex-1 py-2.5 rounded-lg text-xs font-medium"
+                  style={{
+                    background:
+                      recoveryMethod === 'key'
+                        ? 'var(--accent)'
+                        : 'var(--bg-elevated)',
+                    color:
+                      recoveryMethod === 'key'
+                        ? '#fff'
+                        : 'var(--text-secondary)',
+                    border: '0.5px solid var(--border)',
+                  }}
+                >
+                  Recovery key
+                  <div style={{ fontSize: 10, opacity: 0.8, marginTop: 2 }}>
+                    Keeps your vault
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecoveryMethod('otp')}
+                  className="flex-1 py-2.5 rounded-lg text-xs font-medium"
+                  style={{
+                    background:
+                      recoveryMethod === 'otp'
+                        ? 'var(--accent)'
+                        : 'var(--bg-elevated)',
+                    color:
+                      recoveryMethod === 'otp'
+                        ? '#fff'
+                        : 'var(--text-secondary)',
+                    border: '0.5px solid var(--border)',
+                  }}
+                >
+                  Email code
+                  <div style={{ fontSize: 10, opacity: 0.8, marginTop: 2 }}>
+                    Vault becomes empty
+                  </div>
+                </button>
+              </div>
+            </div>
+
             <button
-              onClick={handleSendOTP}
+              onClick={() => {
+                if (!email.trim()) return setError('Enter your email address.');
+                if (!recoveryMethod)
+                  return setError('Choose a reset method above.');
+                setError('');
+                if (recoveryMethod === 'key') {
+                  setStep('recovery');
+                } else {
+                  handleSendOTP();
+                }
+              }}
               disabled={loading}
               className="w-full rounded-lg py-2.5 text-sm font-medium"
               style={{
-                background: 'var(--danger)',
+                background:
+                  recoveryMethod === 'key' ? 'var(--accent)' : 'var(--danger)',
                 color: '#fff',
                 opacity: loading ? 0.7 : 1,
               }}
             >
-              {loading ? 'Sending code...' : 'Send reset code'}
+              {loading
+                ? 'Sending code...'
+                : recoveryMethod === 'key'
+                  ? 'Continue with recovery key'
+                  : 'Send reset code'}
             </button>
           </div>
         )}
 
-        {/* ─── Step 2: OTP ───────────────────────────────────────── */}
+        {/* ─── Step 2a: OTP ──────────────────────────────────────── */}
         {step === 'otp' && (
           <div className="flex flex-col gap-4">
             <div className="flex items-center justify-between">
@@ -356,7 +493,6 @@ export default function ForgotPassword() {
               </p>
             </div>
 
-            {/* 6 digit boxes */}
             <div className="flex gap-2 justify-center">
               {[0, 1, 2, 3, 4, 5].map((i) => (
                 <input
@@ -413,7 +549,6 @@ export default function ForgotPassword() {
               ))}
             </div>
 
-            {/* Timer bar */}
             <div
               className="h-1 rounded-full overflow-hidden"
               style={{ background: 'var(--border)' }}
@@ -466,10 +601,207 @@ export default function ForgotPassword() {
           </div>
         )}
 
-        {/* ─── Step 3: New Password ──────────────────────────────── */}
+        {/* ─── Step 2b: Recovery key ─────────────────────────────── */}
+        {step === 'recovery' && (
+          <div className="flex flex-col gap-4">
+            <div
+              className="rounded-lg p-3 text-xs"
+              style={{
+                background: 'rgba(16,185,129,0.08)',
+                border: '0.5px solid rgba(16,185,129,0.3)',
+                color: 'var(--accent)',
+              }}
+            >
+              <p className="font-semibold mb-1">
+                ✓ Your vault will be preserved
+              </p>
+              <p style={{ color: 'var(--text-secondary)' }}>
+                Upload your recovery key file or enter the code manually. All
+                your saved items will remain intact.
+              </p>
+            </div>
+
+            <div>
+              <label
+                className="block text-xs font-medium mb-1.5"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                Upload recovery key file
+              </label>
+              <input
+                type="file"
+                accept=".txt"
+                onChange={handleRecoveryFileUpload}
+                aria-label="Upload recovery key file"
+                className="w-full text-sm"
+                style={{ color: 'var(--text-secondary)' }}
+              />
+              {recoveryFile && (
+                <p className="text-xs mt-1" style={{ color: 'var(--accent)' }}>
+                  ✓ Loaded: {recoveryFile.name}
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div
+                className="flex-1 h-px"
+                style={{ background: 'var(--border)' }}
+              />
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                or enter manually
+              </span>
+              <div
+                className="flex-1 h-px"
+                style={{ background: 'var(--border)' }}
+              />
+            </div>
+
+            <div>
+              <label
+                className="block text-xs font-medium mb-1.5"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                Recovery key
+              </label>
+              <input
+                type="text"
+                value={recoveryKeyInput}
+                onChange={(e) =>
+                  setRecoveryKeyInput(e.target.value.toUpperCase())
+                }
+                placeholder="XXXX-XXXX-XXXX-XXXX-..."
+                className="w-full rounded-lg px-3 py-2.5 text-sm outline-none font-mono vx-input"
+                style={{
+                  background: 'var(--bg-elevated)',
+                  border: '0.5px solid var(--border)',
+                  color: 'var(--text-primary)',
+                }}
+              />
+            </div>
+
+            <div>
+              <label
+                className="block text-xs font-medium mb-1"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                New master password
+              </label>
+              <div className="relative">
+                <input
+                  type={showPass ? 'text' : 'password'}
+                  value={newPass}
+                  onChange={(e) => setNewPass(e.target.value)}
+                  placeholder="Minimum 12 characters"
+                  className="w-full rounded-lg px-3 py-2.5 text-sm outline-none pr-14 vx-input"
+                  style={{
+                    background: 'var(--bg-elevated)',
+                    border: '0.5px solid var(--border)',
+                    color: 'var(--text-primary)',
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPass((p) => !p)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs vx-btn"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  {showPass ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              {strength && newPass.length > 0 && (
+                <div className="mt-1.5">
+                  <div className="flex gap-1 mb-0.5">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div
+                        key={i}
+                        className="h-1 flex-1 rounded-full"
+                        style={{
+                          background:
+                            i <= strength.bars
+                              ? strength.color
+                              : 'var(--border)',
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <span className="text-xs" style={{ color: strength.color }}>
+                    {strength.label}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label
+                className="block text-xs font-medium mb-1"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                Confirm new password
+              </label>
+              <input
+                type="password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                className="w-full rounded-lg px-3 py-2.5 text-sm outline-none vx-input"
+                style={{
+                  background: 'var(--bg-elevated)',
+                  border:
+                    confirm && confirm !== newPass
+                      ? '0.5px solid var(--danger)'
+                      : '0.5px solid var(--border)',
+                  color: 'var(--text-primary)',
+                }}
+              />
+              {confirm && confirm !== newPass && (
+                <p className="text-xs mt-1" style={{ color: 'var(--danger)' }}>
+                  Passwords do not match
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={handleRecoveryReset}
+              disabled={
+                loading ||
+                !recoveryKeyInput ||
+                !newPass ||
+                !confirm ||
+                newPass !== confirm
+              }
+              className="w-full rounded-lg py-2.5 text-sm font-medium"
+              style={{
+                background: 'var(--accent)',
+                color: '#fff',
+                opacity:
+                  loading ||
+                  !recoveryKeyInput ||
+                  !newPass ||
+                  !confirm ||
+                  newPass !== confirm
+                    ? 0.5
+                    : 1,
+              }}
+            >
+              {loading ? 'Restoring vault...' : 'Reset password & keep vault'}
+            </button>
+
+            <button
+              onClick={() => {
+                setStep('email');
+                setError('');
+              }}
+              className="text-xs text-center vx-btn"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              ← Back
+            </button>
+          </div>
+        )}
+
+        {/* ─── Step 3: New Password (OTP path only) ─────────────── */}
         {step === 'newpass' && (
           <div className="flex flex-col gap-4">
-            {/* Final warning */}
             <div
               className="rounded-lg p-3 text-xs"
               style={{
@@ -567,7 +899,6 @@ export default function ForgotPassword() {
               )}
             </div>
 
-            {/* Acknowledgment checkbox */}
             <label className="flex items-start gap-2.5 cursor-pointer">
               <input
                 type="checkbox"
@@ -643,8 +974,9 @@ export default function ForgotPassword() {
                 className="text-sm mt-1"
                 style={{ color: 'var(--text-muted)' }}
               >
-                Your vault has been cleared. Log in with your new master
-                password to start fresh.
+                {recoveryMethod === 'key'
+                  ? 'Your vault has been preserved. Log in with your new master password.'
+                  : 'Your vault has been cleared. Log in with your new master password to start fresh.'}
               </p>
             </div>
             <button
@@ -657,7 +989,6 @@ export default function ForgotPassword() {
           </div>
         )}
 
-        {/* Back to login */}
         {step !== 'done' && (
           <p
             className="text-center text-sm mt-6"

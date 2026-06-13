@@ -72,3 +72,28 @@ export async function decryptBytes(
   const b64 = await decrypt(payload, key);
   return fromBase64(b64);
 }
+
+//add a recovery key generator
+
+export function generateRecoveryKey(): Uint8Array<ArrayBuffer> {
+  return crypto.getRandomValues(new Uint8Array(32)) as Uint8Array<ArrayBuffer>;
+}
+
+// Encode recovery key as a readable string for the downloadable file
+export function recoveryKeyToString(key: Uint8Array): string {
+  return Array.from(key)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase()
+    .replace(/(.{4})/g, '$1-')
+    .slice(0, -1); // groups of 4 hex chars separated by dashes
+}
+
+export function recoveryKeyFromString(str: string): Uint8Array<ArrayBuffer> {
+  const hex = str.replace(/-/g, '').toLowerCase();
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  }
+  return bytes as Uint8Array<ArrayBuffer>;
+}

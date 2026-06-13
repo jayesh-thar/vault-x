@@ -705,3 +705,85 @@ export async function googleUnlockSession(
     res.status(500).json({ error: 'Failed to unlock' });
   }
 }
+
+export async function forgotPasswordWithRecoveryKey(
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const {
+      email,
+      newAuthKey,
+      newAuthSalt,
+      newKdfSalt,
+      newKdfParams,
+      newVaultKeyEnc,
+      newVaultKeyIv,
+    } = req.body;
+    if (!email || !newAuthKey || !newVaultKeyEnc) {
+      res.status(400).json({ error: 'Missing required fields' });
+      return;
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const userRow = await pool.query('SELECT id FROM users WHERE email = $1', [
+      normalizedEmail,
+    ]);
+    if (!userRow.rows.length) {
+      res.status(400).json({ error: 'Invalid request' });
+      return;
+    }
+
+    const userId = userRow.rows[0].id;
+    const { hashAuthKey } = await import('../../utils/hash.js');
+    const newAuthHash = await hashAuthKey(newAuthKey);
+
+    await pool.query(
+      `UPDATE users SET
+        auth_hash = $1, auth_salt = $2, kdf_salt = $3,
+        kdf_params = $4, vault_key_enc = $5, vault_key_iv = $6,
+        updated_at = NOW()
+       WHERE id = $7`,
+      [
+        newAuthHash,
+        newAuthSalt,
+        newKdfSalt,
+        JSON.stringify(newKdfParams),
+        newVaultKeyEnc,
+        newVaultKeyIv,
+        userId,
+      ]
+    );
+
+    await pool.query('DELETE FROM sessions WHERE user_id = $1', [userId]);
+
+    res.json({
+      message: 'Password reset successful. Your vault has been preserved.',
+    });
+  } catch {
+    res.status(500).json({ error: 'Reset failed. Please try again.' });
+  }
+}
+
+// Also need: endpoint to fetch recovery_key_enc/iv + kdfSalt for client-side decryption
+export async function getRecoveryData(
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const { email } = req.query;
+    const userRow = await pool.query(
+      'SELECT recovery_key_enc, recovery_key_iv FROM users WHERE email = $1',
+      [String(email).toLowerCase().trim()]
+    );
+    if (!userRow.rows.length || !userRow.rows[0].recovery_key_enc) {
+      res
+        .status(404)
+        .json({ error: 'No recovery key set up for this account' });
+      return;
+    }
+    res.json(userRow.rows[0]);
+  } catch {
+    res.status(500).json({ error: 'Failed' });
+  }
+}

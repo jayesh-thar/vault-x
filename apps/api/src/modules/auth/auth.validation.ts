@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const registerSchema = z.object({
   email: z.string().email(),
-  authKey: z.string().min(64), // hex string from client-side Argon2
+  authKey: z.string().min(64),
   authSalt: z.string().min(1),
   kdfSalt: z.string().min(1),
   kdfParams: z.object({
@@ -10,8 +10,11 @@ export const registerSchema = z.object({
     iterations: z.number(),
     parallelism: z.number(),
   }),
-  vaultKeyEnc: z.string().min(1), // encrypted vault key
-  vaultKeyIv: z.string().min(1), // IV used to encrypt vault key
+  vaultKeyEnc: z.string().min(1),
+  vaultKeyIv: z.string().min(1),
+  recoveryKeyEnc: z.string().min(1),
+  recoveryKeyIv: z.string().min(1),
+  recoveryKeyDisplay: z.string().min(1),
 });
 
 export const loginSchema = z.object({
