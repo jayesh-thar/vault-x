@@ -258,7 +258,16 @@ export default function Login() {
         </div>
 
         <p
-          className="text-center text-sm mt-6"
+          className="text-center text-sm mt-4"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          <Link to="/forgot-password" style={{ color: 'var(--text-muted)' }}>
+            Forgot your master password?
+          </Link>
+        </p>
+
+        <p
+          className="text-center text-sm mt-2"
           style={{ color: 'var(--text-muted)' }}
         >
           No vault yet?{' '}

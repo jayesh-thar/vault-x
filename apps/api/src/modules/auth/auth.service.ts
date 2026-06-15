@@ -126,7 +126,7 @@ export async function registerUser(input: RegisterInput) {
           <p style="color: #666; font-size: 12px;">Do not share this key with anyone. VaultX staff will never ask for it. We've also let you download a copy of this key.</p>
         </div>
       `,
-    }).catch(() => {});
+    }).catch((e) => console.error('Recovery email failed:', e));
 
     return { userId, ...tokens };
   } catch (err) {

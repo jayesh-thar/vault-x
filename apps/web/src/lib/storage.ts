@@ -26,7 +26,7 @@ export function clearStoredSession(): void {
 
 // Keep these for backward compat — used in kdf derivation
 export function saveKdfLocally(
-  email: string,
+  _email: string, // (The _ prefix tells TypeScript "I know this is unused, that's intentional.")
   kdfSalt: string,
   kdfParams: KdfParams
 ): void {

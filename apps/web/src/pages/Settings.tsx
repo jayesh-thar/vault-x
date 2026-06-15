@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-// import type { AxiosError } from 'axios';
 import api from '../lib/api';
 import {
   deriveKeys,
@@ -287,7 +286,6 @@ function ProfileTab({
   const [displayName, setDisplayName] = useState('');
   const [photo, setPhoto] = useState<string | null>(null);
   const [draftName, setDraftName] = useState(displayName);
-  const [loadingProfile, setLoadingProfile] = useState(true);
 
   // ADD useEffect to load from API:
   useEffect(() => {
@@ -301,9 +299,8 @@ function ProfileTab({
           data.display_name ?? session?.email?.split('@')[0] ?? 'User'
         );
         setPhoto(data.profile_photo ?? null);
-        setLoadingProfile(false);
       })
-      .catch(() => setLoadingProfile(false));
+      .catch(() => {});
   }, []);
 
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -746,8 +743,8 @@ function SessionsCard() {
 // ─── Security Tab ─────────────────────────────────────────────────────────────
 
 function SecurityTab({ session }: { session: ReturnType<typeof loadSession> }) {
-  const navigate = useNavigate(); // ← ADD
-  const { vaultKey, clearSession } = useVaultStore(); // ← ADD clearSession
+  const navigate = useNavigate();
+  const { clearSession } = useVaultStore();
 
   // OTP state
   const [otpStep, setOtpStep] = useState<'initial' | 'sent' | 'verified'>(

@@ -9,11 +9,11 @@
 
 - [x] Web app (v1.0.0) — complete
 - [x] Extension folder deleted — clean slate
-- [ ] Phase 1: Project setup
-- [ ] Phase 2: Crypto + types + message protocol
-- [ ] Phase 3: Service worker (auth + vault)
-- [ ] Phase 4: Popup UI (login + vault list)
-- [ ] Phase 5: Content script (form detection)
+- [x] Phase 1: Project setup
+- [x] Phase 2: Crypto + types + message protocol
+- [x] Phase 3: Service worker (auth + vault)
+- [x] Phase 4: Popup UI (login + vault list)
+- [x] Phase 5: Content script (form detection)
 - [ ] Phase 6: Autofill (fill credentials into forms)
 - [ ] Phase 7: Save new credentials
 - [ ] Phase 8: Polish + publish (Edge + Firefox)

@@ -105,7 +105,6 @@ export default function HealthDashboard() {
       const breachResult = pw ? await checkBreached(pw) : false;
       const isBreached = breachResult === true;
       const hibpFailed = breachResult === null;
-      const breachUnknown = breachResult === null;
       const ageDays = payload.passwordChangedAt
         ? Math.floor(
             (Date.now() - new Date(payload.passwordChangedAt).getTime()) /

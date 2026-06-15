@@ -11,8 +11,12 @@ export const pool = new Pool({
   idleTimeoutMillis: 30000,
 });
 
+let logged = false;
 pool.on('connect', () => {
-  console.log('PostgreSQL connected');
+  if (!logged) {
+    console.log('PostgreSQL connected');
+    logged = true;
+  }
 });
 
 pool.on('error', (err) => {

@@ -14,8 +14,6 @@ import type {
   SetCardPinResponse,
   CheckCardPinExistsResponse,
   CheckHasCardsResponse,
-  GoogleAuthResponse,
-  GoogleUnlockResponse,
 } from '../lib/messages';
 import type {
   SessionData,
@@ -133,10 +131,6 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
       return handleVerifyCardPin(msg.payload);
     case MSG.CHECK_HAS_CARDS:
       return handleCheckHasCards();
-    case MSG.GOOGLE_AUTH:
-      return handleGoogleAuth();
-    case MSG.GOOGLE_UNLOCK:
-      return handleGoogleUnlock(msg.payload);
     case MSG.SAVE_FORM_FIELDS:
       return handleSaveFormFields((msg as any).payload);
     case MSG.GET_PENDING_CREDENTIAL:
@@ -398,7 +392,7 @@ async function handleSaveCredentials(payload: {
     await apiRequest('/api/vault/items', {
       method: 'POST',
       token: session.accessToken,
-      body: { type: 'login', encryptedData: ciphertext, iv, category: null },
+      body: { type: 'login', encryptedData: ciphertext, iv },
     });
 
     return { success: true };
@@ -474,141 +468,6 @@ async function handleCheckHasCards(): Promise<CheckHasCardsResponse> {
   const vaultRes = await handleGetVaultItems();
   if (!vaultRes.success || !vaultRes.items) return { hasCards: false };
   return { hasCards: vaultRes.items.some((i) => i.type === 'card') };
-}
-
-declare const __GOOGLE_CLIENT_ID__: string;
-const GOOGLE_CLIENT_ID = __GOOGLE_CLIENT_ID__;
-
-async function handleGoogleAuth(): Promise<GoogleAuthResponse> {
-  try {
-    const redirectUri = `https://${chrome.runtime.id}.chromiumapp.org/`;
-
-    const params = new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: 'openid email profile',
-      access_type: 'offline',
-      prompt: 'select_account',
-    });
-
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
-
-    // Opens Google consent popup — user selects account
-    const responseUrl = await new Promise<string>((resolve, reject) => {
-      chrome.identity.launchWebAuthFlow(
-        { url: authUrl, interactive: true },
-        (url) => {
-          if (chrome.runtime.lastError || !url) {
-            reject(new Error(chrome.runtime.lastError?.message ?? 'Cancelled'));
-          } else {
-            resolve(url);
-          }
-        }
-      );
-    });
-
-    const code = new URL(responseUrl).searchParams.get('code');
-    if (!code) throw new Error('No auth code received from Google');
-
-    // Send code to our backend
-    const result = await apiRequest<{
-      isNewUser: boolean;
-      accessToken?: string;
-      email?: string;
-      kdfSalt?: string;
-      kdfParams?: { iterations: number; memory: number; parallelism: number };
-      vaultKeyEnc?: string;
-      vaultKeyIv?: string;
-    }>('/api/auth/google/extension', {
-      method: 'POST',
-      body: { code, redirectUri },
-    });
-
-    if (result.isNewUser) {
-      // Store email temporarily — show registration form in popup
-      await chrome.storage.session.set({ pendingGoogleEmail: result.email });
-      return { success: true, isNewUser: true, email: result.email };
-    }
-
-    // Existing Google user — store partial session, ask for master password
-    await chrome.storage.session.set({
-      pendingGoogleSession: {
-        accessToken: result.accessToken,
-        email: result.email,
-        kdfSalt: result.kdfSalt,
-        kdfParams: result.kdfParams,
-        vaultKeyEnc: result.vaultKeyEnc,
-        vaultKeyIv: result.vaultKeyIv,
-      },
-    });
-
-    return {
-      success: true,
-      isNewUser: false,
-      needsMasterPassword: true,
-      email: result.email,
-    };
-  } catch (err) {
-    return {
-      success: false,
-      error: err instanceof Error ? err.message : 'Google auth failed',
-    };
-  }
-}
-
-async function handleGoogleUnlock(payload: {
-  password: string;
-}): Promise<GoogleUnlockResponse> {
-  try {
-    const r = await chrome.storage.session.get('pendingGoogleSession');
-    const pending = r.pendingGoogleSession as
-      | {
-          accessToken: string;
-          email: string;
-          kdfSalt: string;
-          kdfParams: {
-            iterations: number;
-            memory: number;
-            parallelism: number;
-          };
-          vaultKeyEnc: string;
-          vaultKeyIv: string;
-        }
-      | undefined;
-
-    if (!pending)
-      return {
-        success: false,
-        error: 'Session expired. Try Google login again.',
-      };
-
-    const { vaultKey } = await deriveKeys(
-      payload.password,
-      pending.kdfSalt,
-      pending.kdfParams
-    );
-
-    const masterKeyBytes = await decryptBytes(
-      { ciphertext: pending.vaultKeyEnc, iv: pending.vaultKeyIv },
-      vaultKey
-    );
-
-    if (masterKeyBytes.length !== 32) {
-      return { success: false, error: 'Incorrect master password' };
-    }
-
-    await saveSession({
-      masterKey: Array.from(masterKeyBytes),
-      accessToken: pending.accessToken,
-      email: pending.email,
-    });
-    await chrome.storage.session.remove('pendingGoogleSession');
-    return { success: true };
-  } catch (err) {
-    console.error('[VaultX] handleGoogleUnlock error:', err);
-    return { success: false, error: 'Incorrect master password' };
-  }
 }
 
 async function handleSaveFormFields(payload: {
@@ -690,7 +549,7 @@ async function handleSaveFormFields(payload: {
     await apiRequest('/api/vault/items', {
       method: 'POST',
       token: session.accessToken,
-      body: { type: 'login', encryptedData: ciphertext, iv, category: null },
+      body: { type: 'login', encryptedData: ciphertext, iv },
     });
 
     return { saved: true, autoSave };

@@ -20,6 +20,81 @@ interface CapturedField {
   label: string;
 }
 
+const PENDING_CAPTURE_KEY = 'vaultx_pending_capture';
+const CAPTURE_TIMEOUT_MS = 8000;
+
+async function storePendingCapture(
+  fields: CapturedField[],
+  domain: string,
+  title: string,
+  url: string
+) {
+  await chrome.storage.session.set({
+    [PENDING_CAPTURE_KEY]: {
+      fields,
+      domain,
+      title,
+      url,
+      submittedUrl: window.location.href,
+      timestamp: Date.now(),
+    },
+  });
+}
+
+async function checkPendingCaptureOnLoad() {
+  const r = await chrome.storage.session.get(PENDING_CAPTURE_KEY);
+  const pending = r[PENDING_CAPTURE_KEY] as
+    | {
+        fields: CapturedField[];
+        domain: string;
+        title: string;
+        url: string;
+        submittedUrl: string;
+        timestamp: number;
+      }
+    | undefined;
+
+  if (!pending) return;
+  await chrome.storage.session.remove(PENDING_CAPTURE_KEY);
+
+  // Too old — abandoned form, discard
+  if (Date.now() - pending.timestamp > CAPTURE_TIMEOUT_MS) return;
+
+  // Same URL as when submitted = page didn't navigate = likely a
+  // failed login (error shown on same page) → discard, don't save
+  const navigated = window.location.href !== pending.submittedUrl;
+  if (!navigated) {
+    console.log('[VaultX] Login likely failed (no navigation) — not saving');
+    return;
+  }
+
+  // URL changed = login/register likely succeeded → proceed
+  try {
+    const session = (await chrome.runtime.sendMessage({
+      type: 'CHECK_SESSION',
+    })) as { isLoggedIn: boolean };
+    if (!session?.isLoggedIn) return;
+  } catch {
+    return;
+  }
+
+  const response = (await chrome.runtime.sendMessage({
+    type: 'SAVE_FORM_FIELDS',
+    payload: {
+      fields: pending.fields,
+      domain: pending.domain,
+      title: pending.title,
+      url: pending.url,
+    },
+  })) as { saved: boolean; autoSave: boolean } | null;
+
+  if (response?.saved) {
+    showSaveToast('✓ Saved to VaultX');
+  } else if (response && !response.autoSave) {
+    showSaveBanner(pending.fields, pending.domain, pending.title);
+  }
+}
+
 // ── Fill input (works with React/Vue/Angular) ─────────────────────────────
 function fillInput(input: HTMLInputElement, value: string): void {
   input.focus();
@@ -269,6 +344,95 @@ function showSaveBanner(
   }, 15000);
 }
 
+// ADD near the other UI functions (after showSaveBanner):
+
+interface AutofillItem {
+  id: string;
+  payload: {
+    title: string;
+    username?: string;
+    email?: string;
+    password?: string;
+  };
+}
+
+function showAutofillSuggestion(items: AutofillItem[]) {
+  document.getElementById('vaultx-autofill-suggestion')?.remove();
+
+  const box = document.createElement('div');
+  box.id = 'vaultx-autofill-suggestion';
+  box.style.cssText = `
+    position:fixed;bottom:20px;right:20px;width:260px;
+    background:#1e293b;border:1px solid #334155;border-radius:12px;
+    padding:12px;font-family:-apple-system,sans-serif;
+    z-index:2147483647;box-shadow:0 8px 32px rgba(0,0,0,0.5);
+  `;
+
+  const list = items
+    .slice(0, 3)
+    .map((item, i) => {
+      const label =
+        item.payload.username || item.payload.email || item.payload.title;
+      return `<button data-idx="${i}" style="display:flex;align-items:center;gap:8px;width:100%;padding:8px;border-radius:8px;border:none;background:#0f172a;color:#f1f5f9;font-size:12px;cursor:pointer;text-align:left;margin-bottom:6px;">
+        <span style="font-size:16px;">🔑</span>
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(label)}</span>
+      </button>`;
+    })
+    .join('');
+
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <span style="font-size:16px;">🔐</span>
+      <p style="font-size:12px;font-weight:600;color:#f1f5f9;margin:0;flex:1;">VaultX — Autofill available</p>
+      <button id="vaultx-autofill-close" style="background:none;border:none;color:#475569;cursor:pointer;font-size:14px;">✕</button>
+    </div>
+    ${list}
+  `;
+
+  document.body.appendChild(box);
+
+  box.querySelectorAll('button[data-idx]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const idx = Number((btn as HTMLElement).dataset.idx);
+      const item = items[idx];
+      autofillCredentials({
+        email: item.payload.email,
+        username: item.payload.username,
+        password: item.payload.password,
+      });
+      box.remove();
+    });
+  });
+
+  document
+    .getElementById('vaultx-autofill-close')
+    ?.addEventListener('click', () => box.remove());
+
+  setTimeout(() => box.remove(), 20000);
+}
+
+async function checkAutofillSuggestion() {
+  if (!findPasswordInput()) return; // no login form on this page
+
+  try {
+    const session = (await chrome.runtime.sendMessage({
+      type: 'CHECK_SESSION',
+    })) as { isLoggedIn: boolean };
+    if (!session?.isLoggedIn) return;
+
+    const res = (await chrome.runtime.sendMessage({
+      type: 'GET_ITEMS_FOR_DOMAIN',
+      payload: { domain: window.location.hostname },
+    })) as { items: AutofillItem[] };
+
+    if (res?.items?.length) {
+      showAutofillSuggestion(res.items);
+    }
+  } catch {
+    /* extension not available — ignore */
+  }
+}
+
 // ── Form submit capture ───────────────────────────────────────────────────
 let formSubmitHandler: ((e: Event) => void) | null = null;
 let observerSetup = false;
@@ -277,20 +441,37 @@ function setupFormSubmitCapture() {
   if (formSubmitHandler) return;
 
   formSubmitHandler = async (_e: Event) => {
-    await new Promise((r) => setTimeout(r, 150));
-
     const passwordInput = findPasswordInput();
     if (!passwordInput || !passwordInput.value.trim()) return;
 
+    const capturedPassword = passwordInput.value;
     const fields = findAllFormInputs();
     if (fields.length < 2) return;
+
+    const submittedUrl = window.location.href;
+
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // If the SAME password field still has the SAME value and the page
+    // hasn't navigated — the submit almost certainly failed (validation
+    // error, wrong password, etc.) and nothing actually happened.
+    const stillThere = findPasswordInput();
+    const sameUrl = window.location.href === submittedUrl;
+    const sameValue = stillThere?.value === capturedPassword;
+
+    if (sameUrl && stillThere && sameValue) {
+      console.log(
+        '[VaultX] Skipping save — form unchanged after submit (likely failed)'
+      );
+      return;
+    }
 
     // CHECK SESSION FIRST — don't show banner if not logged in
     try {
       const session = (await chrome.runtime.sendMessage({
         type: 'CHECK_SESSION',
       })) as { isLoggedIn: boolean };
-      if (!session?.isLoggedIn) return; // not logged in — silent, don't interrupt user
+      if (!session?.isLoggedIn) return; // not logged in — silent
     } catch {
       return; // extension not available
     }
@@ -373,4 +554,5 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // ── Init — only on non-excluded domains ───────────────────────────────────
 if (!isExcluded) {
   setupFormSubmitCapture();
+  setTimeout(checkAutofillSuggestion, 1000);
 }

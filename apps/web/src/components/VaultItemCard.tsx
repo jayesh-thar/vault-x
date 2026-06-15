@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { getFaviconUrl } from '../lib/favicon';
 import { generateTOTP, type TOTPResult } from '../lib/totp';
 import type {
@@ -115,8 +115,7 @@ export default function VaultItemCard({
   onShare,
 }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [copyCountdown, setCopyCountdown] = useState<number | null>(null);
+  const [copyCountdown] = useState<number | null>(null);
   const [faviconError, setFaviconError] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -168,12 +167,10 @@ export default function VaultItemCard({
   async function handleCopy(text: string) {
     try {
       await navigator.clipboard.writeText(text);
-      setCopied(true);
 
       // Auto-clear clipboard after 30 seconds
       setTimeout(async () => {
         await navigator.clipboard.writeText('').catch(() => {});
-        setCopied(false);
 
         // Browser notification when clipboard clears (optional, needs permission)
         if (Notification.permission === 'granted') {

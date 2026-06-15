@@ -261,7 +261,10 @@ export default function ForgotPassword() {
 
         {/* Step indicator */}
         <div className="flex items-center gap-2 mb-6">
-          {['Email', 'Verify', 'New Password'].map((label, i) => {
+          {(recoveryMethod === 'key'
+            ? ['Email', 'Recovery Key', 'Done']
+            : ['Email', 'Verify', 'New Password']
+          ).map((label, i) => {
             const stepNum = i + 1;
             const current =
               step === 'email'
