@@ -146,7 +146,7 @@ export default function VaultItem({
   }
 
   function openWebApp() {
-    chrome.tabs.create({ url: 'http://localhost:5173/dashboard' });
+    chrome.tabs.create({ url: `${import.meta.env.VITE_WEB_URL}/dashboard` });
   }
 
   async function deleteItem() {

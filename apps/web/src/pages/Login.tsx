@@ -219,7 +219,7 @@ export default function Login() {
           </div>
 
           <a
-            href="http://localhost:5000/api/auth/google"
+            href={`${import.meta.env.VITE_API_URL ?? 'http://localhost:5000'}/api/auth/google`}
             className="w-full flex items-center justify-center gap-3 rounded-lg py-2.5 text-sm font-medium vx-btn-ghost"
             style={{
               border: '0.5px solid var(--border)',

@@ -313,7 +313,7 @@ export default function Vault({ onLogout }: Props) {
                   style={s.profileAction}
                   onClick={() => {
                     chrome.tabs.create({
-                      url: 'http://localhost:5173/settings',
+                      url: `${import.meta.env.VITE_WEB_URL}/settings`,
                     });
                     setShowProfile(false);
                   }}

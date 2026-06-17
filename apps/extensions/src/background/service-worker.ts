@@ -143,7 +143,7 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
       return { success: true };
     case MSG.REUNLOCK:
       return handleReunlock(msg.payload);
-    case 'UPSERT_CREDENTIAL':
+    case MSG.UPSERT_CREDENTIAL:
       return handleUpsertCredential((msg as any).payload);
     case MSG.ADD_VAULT_ITEM:
       return handleAddVaultItem((msg as any).payload);

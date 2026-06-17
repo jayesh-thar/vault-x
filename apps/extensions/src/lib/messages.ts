@@ -21,6 +21,7 @@ export const MSG = {
   REUNLOCK: 'REUNLOCK',
   ADD_VAULT_ITEM: 'ADD_VAULT_ITEM',
   DELETE_VAULT_ITEM: 'DELETE_VAULT_ITEM',
+  UPSERT_CREDENTIAL: 'UPSERT_CREDENTIAL',
 } as const;
 
 // ── Request shapes ─────────────────────────────────────────────────────────
@@ -116,6 +117,16 @@ export interface DeleteVaultItemResponse {
   success: boolean;
 }
 
+export interface UpsertCredentialRequest {
+  type: typeof MSG.UPSERT_CREDENTIAL;
+  payload: {
+    fields: Array<{ name: string; type: string; value: string; label: string }>;
+    domain: string;
+    title: string;
+    url: string;
+  };
+}
+
 // ── Union — ALL messages must be here ──────────────────────────────────────
 export type ExtensionMessage =
   | CheckSessionRequest
@@ -136,7 +147,8 @@ export type ExtensionMessage =
   | SavePendingCredentialRequest
   | ReunlockRequest
   | AddVaultItemRequest
-  | DeleteVaultItemRequest;
+  | DeleteVaultItemRequest
+  | UpsertCredentialRequest;
 
 // ── Response shapes ────────────────────────────────────────────────────────
 export interface CheckSessionResponse {

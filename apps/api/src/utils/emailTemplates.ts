@@ -250,6 +250,7 @@ export function forgotPasswordEmail(email: string, code: string): string {
 }
 
 export function cardPinSetEmail(name: string, email: string): string {
+  const appUrl = process.env.APP_URL ?? 'http://localhost:5173';
   return `
 <!DOCTYPE html>
 <html>
@@ -302,7 +303,7 @@ export function cardPinSetEmail(name: string, email: string): string {
         <h3>🔄 How to Reset Your PIN (if forgotten)</h3>
         <p style="font-size: 12px; color: #64748b; margin: 0 0 12px;">You can reset your Card PIN from the web app or extension:</p>
         <div class="steps">
-          <div class="step"><div class="step-num">1</div><span>Go to <a href="http://localhost:5173/settings">VaultX Web App → Settings</a></span></div>
+          <div class="step"><div class="step-num">1</div><span>Go to <a href="${appUrl}/settings">VaultX Web App → Settings</a></span></div>
           <div class="step"><div class="step-num">2</div><span>Navigate to <strong>Security → Card PIN</strong></span></div>
           <div class="step"><div class="step-num">3</div><span>Click <strong>"Reset Card PIN"</strong></span></div>
           <div class="step"><div class="step-num">4</div><span>Enter your <strong>Master Password</strong> to verify identity</span></div>
@@ -323,12 +324,12 @@ export function cardPinSetEmail(name: string, email: string): string {
 
       <p style="font-size: 13px; color: #64748b; line-height: 1.6; margin-top: 20px;">
         If you did not set this PIN, please 
-        <a href="http://localhost:5173/settings/security">secure your account immediately</a> 
+        <a href="${appUrl}/settings/security">secure your account immediately</a> 
         and contact support.
       </p>
     </div>
     <div class="footer">
-      VaultX Security Team · <a href="http://localhost:5173">vaultx.app</a><br>
+      VaultX Security Team · <a href="${appUrl}">vaultx.app</a><br>
       This is an automated security notification for ${email}
     </div>
   </div>

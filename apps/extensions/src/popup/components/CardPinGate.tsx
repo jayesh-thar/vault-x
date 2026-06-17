@@ -218,7 +218,9 @@ export default function CardPinGate({
       <button
         style={s.forgot}
         onClick={() =>
-          chrome.tabs.create({ url: 'http://localhost:5173/settings' })
+          chrome.tabs.create({
+            url: `${import.meta.env.VITE_WEB_URL}/settings`,
+          })
         }
       >
         Forgot PIN? Reset via web app →

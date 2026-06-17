@@ -77,7 +77,9 @@ export default function Login({ onLoginSuccess }: Props) {
         <button
           style={s.backBtn}
           onClick={() =>
-            chrome.tabs.create({ url: 'http://localhost:5173/forgot-password' })
+            chrome.tabs.create({
+              url: `${import.meta.env.VITE_WEB_URL}/forgot-password`,
+            })
           }
         >
           Forgot password?
@@ -91,7 +93,9 @@ export default function Login({ onLoginSuccess }: Props) {
         <button
           style={s.registerBtn}
           onClick={() =>
-            chrome.tabs.create({ url: 'http://localhost:5173/register' })
+            chrome.tabs.create({
+              url: `${import.meta.env.VITE_WEB_URL}/register`,
+            })
           }
         >
           Create account →
