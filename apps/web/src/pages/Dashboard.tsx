@@ -511,11 +511,30 @@ export default function Dashboard() {
 
       if (editingId) {
         await api.put(`/api/vault/items/${editingId}`, body);
+        closeModal();
+        await fetchItems();
       } else {
         await api.post('/api/vault/items', body);
+        closeModal();
+        await fetchItems();
+
+        // After adding a new card — check if PIN is set up
+        if (form.type === 'card') {
+          try {
+            const pinCheck = await api.get('/api/auth/card-pin/exists');
+            if (!pinCheck.data.exists) {
+              // Show a non-blocking prompt to go set up PIN
+              setPageError(''); // clear any errors
+              const go = window.confirm(
+                "💳 Card saved!\n\nYou haven't set up a Card PIN yet. Cards are protected by a separate PIN.\n\nGo to Settings → Security to set one up now?"
+              );
+              if (go) navigate('/settings');
+            }
+          } catch {
+            // ignore — non-critical
+          }
+        }
       }
-      closeModal();
-      await fetchItems();
     } catch (err: any) {
       if (err.response?.status === 404) {
         setFormError('Item was deleted elsewhere. Refreshing...');
