@@ -170,6 +170,20 @@ export default function Unlock() {
             </div>
           </div>
 
+          <button
+            onClick={handleUnlock}
+            disabled={loading}
+            className="w-full rounded-lg py-2.5 text-sm font-medium"
+            style={{
+              background: 'var(--accent)',
+              color: '#fff',
+              opacity: loading ? 0.7 : 1,
+              cursor: loading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {loading ? 'Unlocking...' : 'Unlock vault'}
+          </button>
+
           <p
             className="text-center text-xs mt-1"
             style={{ color: 'var(--text-muted)' }}

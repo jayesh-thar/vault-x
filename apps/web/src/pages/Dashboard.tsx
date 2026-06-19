@@ -109,6 +109,36 @@ function generatePassword(length = 20): string {
     .join('');
 }
 
+function luhnCheck(num: string): boolean {
+  const digits = num.replace(/\D/g, '');
+  if (digits.length < 13 || digits.length > 19) return false;
+  let sum = 0;
+  let shouldDouble = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let digit = parseInt(digits[i], 10);
+    if (shouldDouble) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+    shouldDouble = !shouldDouble;
+  }
+  return sum % 10 === 0;
+}
+
+function detectCardType(num: string): string {
+  const digits = num.replace(/\D/g, '');
+  if (/^4/.test(digits)) return 'Visa';
+  if (/^5[1-5]/.test(digits) || /^2(2[2-9]|[3-6]|7[01]|720)/.test(digits))
+    return 'Mastercard';
+  if (/^3[47]/.test(digits)) return 'Amex';
+  if (/^6(011|5)/.test(digits)) return 'Discover';
+  if (/^3(0[0-5]|[68])/.test(digits)) return 'Diners Club';
+  if (/^35/.test(digits)) return 'JCB';
+  if (/^60|^65|^81|^82/.test(digits)) return 'RuPay';
+  return '';
+}
+
 function buildPayload(form: FormState, isNewPassword = false): ItemPayload {
   const base = {
     favorite: form.favorite,
@@ -465,6 +495,28 @@ export default function Dashboard() {
     if (!form.title.trim()) return setFormError('Title is required.');
     if (form.type === 'login' && !form.password.trim())
       return setFormError('Password is required.');
+
+    if (form.type === 'card') {
+      const digits = form.number.replace(/\D/g, '');
+      if (!digits) return setFormError('Card number is required.');
+      if (digits.length < 13 || digits.length > 19)
+        return setFormError('Card number must be 13–19 digits.');
+      if (!luhnCheck(digits))
+        return setFormError(
+          'Card number appears invalid (failed checksum). Please double-check it.'
+        );
+      if (!form.expiry || form.expiry.length < 5)
+        return setFormError('Expiry date is required (MM/YY).');
+      const [mm, yy] = form.expiry.split('/').map(Number);
+      if (!mm || mm < 1 || mm > 12)
+        return setFormError('Expiry month must be between 01–12.');
+      const expDate = new Date(2000 + yy, mm, 0); // last day of that month
+      if (expDate < new Date())
+        return setFormError('This card has already expired.');
+      if (!form.cvv || form.cvv.length < 3)
+        return setFormError('CVV must be 3–4 digits.');
+    }
+
     if (!vaultKey) return;
 
     const payloadData = buildPayload(form, !editingId);
@@ -1185,17 +1237,55 @@ export default function Dashboard() {
                     onChange={(v) => setForm((f) => ({ ...f, cardholder: v }))}
                     placeholder="John Smith"
                   />
-                  <FormField
-                    label="Card Number"
-                    value={form.number}
-                    onChange={(v) =>
-                      setForm((f) => ({
-                        ...f,
-                        number: v.replace(/\D/g, '').slice(0, 16),
-                      }))
-                    }
-                    placeholder="1234 5678 9012 3456"
-                  />
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label
+                        className="block text-xs font-medium"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
+                        Card Number
+                      </label>
+                      {form.number.length >= 4 &&
+                        detectCardType(form.number) && (
+                          <span
+                            className="text-xs font-medium"
+                            style={{ color: 'var(--accent)' }}
+                          >
+                            {detectCardType(form.number)}
+                          </span>
+                        )}
+                    </div>
+                    <input
+                      type="text"
+                      value={form.number}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          number: e.target.value
+                            .replace(/\D/g, '')
+                            .slice(0, 19),
+                        }))
+                      }
+                      placeholder="1234 5678 9012 3456"
+                      className="w-full rounded-lg px-3 py-2 text-sm outline-none vx-input font-mono"
+                      style={{
+                        background: 'var(--bg-elevated)',
+                        border:
+                          form.number.length >= 13 && !luhnCheck(form.number)
+                            ? '0.5px solid var(--danger)'
+                            : '0.5px solid var(--border)',
+                        color: 'var(--text-primary)',
+                      }}
+                    />
+                    {form.number.length >= 13 && !luhnCheck(form.number) && (
+                      <p
+                        className="text-xs mt-1"
+                        style={{ color: 'var(--danger)' }}
+                      >
+                        ⚠ Invalid card number
+                      </p>
+                    )}
+                  </div>
                   <div className="flex gap-2">
                     <div className="flex-1">
                       <div>

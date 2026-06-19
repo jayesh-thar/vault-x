@@ -40,6 +40,11 @@ export default function GoogleSetup() {
 
   const strength = password ? getStrength(password) : null;
   const mismatch = confirm.length > 0 && confirm !== password;
+  const [recoveryKeyData, setRecoveryKeyData] = useState<{
+    key: string;
+    email: string;
+    blob: Blob;
+  } | null>(null);
 
   async function handleSetup() {
     if (!password) return setError('Please create a vault password.');
@@ -84,9 +89,15 @@ export default function GoogleSetup() {
         vaultKeyEnc,
         vaultKeyIv,
       });
-      setAuth(data.userId, data.accessToken);
+      setAuth(userId, data.accessToken);
       setVaultKey(masterKey);
-      navigate('/dashboard', { replace: true });
+      const blob = new Blob(
+        [
+          `VaultX Recovery Key\n\nEmail: ${email}\nRecovery Key: ${recoveryString}\n\nKeep this safe. It's the ONLY way to recover your vault if you forget your master password.\nDo not share it with anyone.`,
+        ],
+        { type: 'text/plain' }
+      );
+      setRecoveryKeyData({ key: recoveryString, email, blob });
     } catch {
       setError('Setup failed. Please try again.');
     } finally {
