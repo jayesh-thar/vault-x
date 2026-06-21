@@ -3,7 +3,9 @@ import { pool } from '../../db/pool';
 
 export async function getStats(_req: Request, res: Response): Promise<void> {
   try {
-    const usersResult = await pool.query('SELECT COUNT(*) FROM users');
+    const usersResult = await pool.query(
+      `SELECT COUNT(*) FROM users WHERE auth_hash != ''`
+    );
 
     const itemsResult = await pool.query(
       `SELECT type, COUNT(*) as count FROM vault_items WHERE deleted_at IS NULL GROUP BY type`
