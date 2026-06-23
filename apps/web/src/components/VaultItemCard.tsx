@@ -683,18 +683,19 @@ export default function VaultItemCard({
 
         <button
           onClick={() => setShowDetails((p) => !p)}
-          className="flex-1 text-xs py-1.5 rounded-lg vx-btn-ghost"
+          className="flex-1 text-xs py-1.5 rounded-lg"
           style={{
             color: showDetails ? 'var(--accent)' : 'var(--text-secondary)',
             background: showDetails
               ? 'var(--accent-subtle)'
               : 'var(--bg-elevated)',
-            border: showDetails ? '0.5px solid var(--accent)' : 'none',
+            border: showDetails
+              ? '0.5px solid var(--accent)'
+              : '0.5px solid var(--border)',
           }}
         >
-          {showDetails ? 'Hide' : 'Details'}
+          {showDetails ? 'Hide' : 'View'}
         </button>
-
         <button
           onClick={onEdit}
           className="flex-1 text-xs py-1.5 rounded-lg vx-btn-ghost"
@@ -719,7 +720,7 @@ export default function VaultItemCard({
         </button>
       </div>
 
-      {/* Details expand panel */}
+      {/* Details panel — all fields with copy */}
       {showDetails && (
         <div
           className="mx-4 mb-3 rounded-xl overflow-hidden"
@@ -728,7 +729,7 @@ export default function VaultItemCard({
             background: 'var(--bg-elevated)',
           }}
         >
-          <div className="px-3 pt-3 pb-2">
+          <div className="px-4 py-3 flex flex-col gap-0">
             {type === 'login' && (
               <>
                 {payload.username && (
@@ -741,9 +742,6 @@ export default function VaultItemCard({
                   <CopyField label="Password" value={payload.password} secret />
                 )}
                 {payload.url && <CopyField label="URL" value={payload.url} />}
-                {payload.notes && (
-                  <CopyField label="Notes" value={payload.notes} />
-                )}
                 {payload.totpSecret && (
                   <CopyField
                     label="TOTP Secret"
@@ -751,10 +749,13 @@ export default function VaultItemCard({
                     secret
                   />
                 )}
-                {(payload.customFields ?? []).map((f: any) => (
+                {payload.notes && (
+                  <CopyField label="Notes" value={payload.notes} />
+                )}
+                {(payload.customFields ?? []).map((f) => (
                   <CopyField
                     key={f.id}
-                    label={f.label || 'Custom field'}
+                    label={f.label || 'Field'}
                     value={f.value}
                     secret={f.type === 'password'}
                   />
@@ -769,10 +770,10 @@ export default function VaultItemCard({
                 {payload.notes && (
                   <CopyField label="Notes" value={payload.notes} />
                 )}
-                {(payload.customFields ?? []).map((f: any) => (
+                {(payload.customFields ?? []).map((f) => (
                   <CopyField
                     key={f.id}
-                    label={f.label || 'Custom field'}
+                    label={f.label || 'Field'}
                     value={f.value}
                     secret={f.type === 'password'}
                   />
@@ -800,6 +801,14 @@ export default function VaultItemCard({
                 {payload.notes && (
                   <CopyField label="Notes" value={payload.notes} />
                 )}
+                {(payload.customFields ?? []).map((f) => (
+                  <CopyField
+                    key={f.id}
+                    label={f.label || 'Field'}
+                    value={f.value}
+                    secret={f.type === 'password'}
+                  />
+                ))}
               </>
             )}
           </div>
