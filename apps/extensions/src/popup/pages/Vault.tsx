@@ -55,19 +55,49 @@ export default function Vault({ onLogout }: Props) {
 
     // Get current tab domain for autofill suggestion
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const url = tabs[0]?.url;
+      const tab = tabs[0];
+      const url = tab?.url;
       if (!url) return;
+
+      // Skip VaultX's own pages and browser pages
+      if (
+        url.startsWith('chrome://') ||
+        url.startsWith('edge://') ||
+        url.includes('vaultx-jayesh.vercel.app') ||
+        url.includes('localhost')
+      )
+        return;
+
       try {
         const domain = new URL(url).hostname;
         setCurrentTabDomain(domain);
-        chrome.runtime
-          .sendMessage({ type: MSG.GET_ITEMS_FOR_DOMAIN, payload: { domain } })
-          .then((res: any) => {
-            if (res?.items?.length) {
-              setDomainItems(res.items);
-              setShowAutofillPanel(true);
-            }
-          });
+
+        // First check if the page actually has a login form visible
+        chrome.tabs.sendMessage(
+          tab.id!,
+          { type: 'GET_FORM_FIELDS' },
+          (fields) => {
+            if (chrome.runtime.lastError) return; // content script not available
+
+            const hasPasswordField = (fields?.fields ?? []).some(
+              (f: any) => f.type === 'password'
+            );
+
+            if (!hasPasswordField) return; // no login form on this page — skip
+
+            chrome.runtime
+              .sendMessage({
+                type: MSG.GET_ITEMS_FOR_DOMAIN,
+                payload: { domain },
+              })
+              .then((res: any) => {
+                if (res?.items?.length) {
+                  setDomainItems(res.items);
+                  setShowAutofillPanel(true);
+                }
+              });
+          }
+        );
       } catch {
         /* ignore */
       }

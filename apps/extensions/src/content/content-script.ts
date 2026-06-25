@@ -22,6 +22,8 @@ interface CapturedField {
 
 const PENDING_CAPTURE_KEY = 'vaultx_pending_capture';
 const CAPTURE_TIMEOUT_MS = 8000;
+const MULTISTEP_KEY = 'vaultx_multistep_fields';
+const MULTISTEP_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 async function storePendingCapture(
   fields: CapturedField[],
@@ -191,8 +193,20 @@ function mapFieldToVaultKey(input: HTMLInputElement): string {
 
 // ── Find password input ───────────────────────────────────────────────────
 function findPasswordInput(): HTMLInputElement | null {
-  return document.querySelector<HTMLInputElement>(
-    'input[type="password"]:not([style*="display: none"])'
+  const inputs = Array.from(
+    document.querySelectorAll<HTMLInputElement>('input[type="password"]')
+  );
+  // Return the first password input that is actually visible
+  return (
+    inputs.find((inp) => {
+      const style = window.getComputedStyle(inp);
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        style.opacity !== '0' &&
+        inp.offsetParent !== null // not in a hidden subtree
+      );
+    }) ?? null
   );
 }
 
@@ -304,11 +318,30 @@ function showAutoSaveToast(
     display:flex;align-items:center;gap:10px;
   `;
   const action = updated ? '✓ Updated' : '✓ Saved';
+  const showCancel = itemId && !updated;
   toast.innerHTML = `<span>${action} "${escapeHtml(title.slice(0, 24))}"</span>${
-    itemId
+    showCancel
       ? '<button id="vx-undo" style="background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;font-weight:600;">Cancel</button>'
       : ''
   }`;
+  if (showCancel) {
+    // ← change from if (itemId) to if (showCancel)
+    document.getElementById('vx-undo')?.addEventListener('click', async () => {
+      await chrome.runtime.sendMessage({
+        type: 'DELETE_VAULT_ITEM',
+        payload: { id: itemId },
+      });
+      await chrome.storage.session.remove('lastAutoSavedItem');
+      toast.remove();
+    });
+    chrome.storage.session.set({
+      lastAutoSavedItem: {
+        id: itemId,
+        title,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      },
+    });
+  }
   document.body.appendChild(toast);
 
   if (itemId) {
@@ -549,48 +582,60 @@ function setupFormSubmitCapture() {
     const passwordInput = findPasswordInput();
     const cardInput = findCardNumberInput();
 
-    const hasPassword = !!passwordInput?.value.trim();
+    const hasPasswordInput = !!passwordInput?.value.trim();
     const hasCard = !!cardInput?.value.trim();
-    if (!hasPassword && !hasCard) return;
+    if (!hasPasswordInput && !hasCard) return;
 
     const capturedValue = (passwordInput ?? cardInput)!.value;
     const fields = findAllFormInputs();
-    if (fields.length < 2) return;
+
+    const hasIdentifier = fields.some(
+      (f) => f.name === 'email' || f.name === 'username'
+    );
+    const hasPassword = fields.some((f) => f.name === 'password');
+
+    // Step 1 of multi-step form — only identifier, no password yet
+    // Tell service worker to store this partial data
+    if (hasIdentifier && !hasPassword) {
+      console.log('[VaultX] Step 1 captured — storing partial fields');
+      await chrome.runtime.sendMessage({
+        type: 'STORE_PARTIAL_FIELDS',
+        payload: { fields, domain: window.location.hostname },
+      });
+      return;
+    }
+
+    if (!hasIdentifier && !hasPassword) return; // nothing useful captured
 
     const submittedUrl = window.location.href;
 
-    await new Promise((r) => setTimeout(r, 1200));
+    await new Promise((r) => setTimeout(r, 1800)); // slightly longer for modal animations
 
     const stillThere = hasPassword
       ? findPasswordInput()
       : findCardNumberInput();
     const sameUrl = window.location.href === submittedUrl;
-    const sameValue = stillThere?.value === capturedValue;
 
-    // Skip ONLY if: same URL AND the exact same field still has the exact same value
-    // If field is gone (modal closed, SPA transition) OR value changed OR URL changed → save
-    if (sameUrl && stillThere && sameValue) {
+    // Check if field is visually gone (hidden by CSS — modal closed but DOM stays)
+    const fieldVisiblyGone =
+      !stillThere ||
+      !stillThere.value ||
+      !stillThere.offsetParent || // null offsetParent = not visible
+      window.getComputedStyle(stillThere).display === 'none' ||
+      window.getComputedStyle(stillThere).visibility === 'hidden' ||
+      window.getComputedStyle(stillThere).opacity === '0';
+
+    const sameValue = stillThere?.value === capturedValue && !fieldVisiblyGone;
+
+    // Only skip if: same URL AND field is still visible AND has same value
+    if (sameUrl && !fieldVisiblyGone && sameValue) {
       console.log(
         '[VaultX] Skipping save — form unchanged (likely failed login)'
       );
       return;
     }
 
-    // Additional check: if SAME URL and field is gone — modal login success scenario
-    // (e.g. boot.dev, Google, GitHub modal logins)
-    const fieldGone = !stillThere || !stillThere.value;
-    const isModalSuccess = sameUrl && fieldGone;
-
-    // Proceed if: URL changed OR field gone (modal closed) OR field value changed
-    if (
-      !sameUrl ||
-      isModalSuccess ||
-      (stillThere && stillThere.value !== capturedValue)
-    ) {
-      // this is a success — fall through to save
-    } else {
-      return; // shouldn't reach here, but safety net
-    }
+    console.log('[VaultX] Proceeding with save — field gone or value changed');
 
     // CHECK SESSION FIRST — don't show banner if not logged in
     try {
@@ -607,7 +652,13 @@ function setupFormSubmitCapture() {
 
     const response = (await chrome.runtime.sendMessage({
       type: 'SAVE_FORM_FIELDS',
-      payload: { fields, domain, title, url: window.location.href },
+      payload: {
+        fields,
+        domain,
+        title,
+        url: window.location.href,
+        mergePartial: true,
+      },
     })) as {
       saved: boolean;
       autoSave: boolean;
@@ -616,6 +667,10 @@ function setupFormSubmitCapture() {
     } | null;
 
     if (response?.saved) {
+      if ((response as any).silent) {
+        // Already existed, nothing changed — completely silent, no toast
+        return;
+      }
       showAutoSaveToast(
         response.id,
         response.title || title,

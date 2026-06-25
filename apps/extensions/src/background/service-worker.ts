@@ -24,20 +24,44 @@ import type {
 
 chrome.alarms.create('auto-lock-check', { periodInMinutes: 1 });
 
+const SESSION_DURATION_MS = 15 * 24 * 60 * 60 * 1000; // 15 days
+const WARN_BEFORE_MS = 24 * 60 * 60 * 1000; // warn at 14 days
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'auto-lock-check') return;
 
-  const r = await chrome.storage.session.get('lastActivity');
-  const lastActivity = r.lastActivity as number | undefined;
+  const persisted = await chrome.storage.local.get('persistedAuth');
+  const loginAt = persisted.persistedAuth?.loginAt as number | undefined;
 
-  if (!lastActivity) return;
+  if (!loginAt) return;
 
-  const inactiveMs = Date.now() - lastActivity;
-  const fifteenMin = 15 * 60 * 1000;
+  const sessionAgeMs = Date.now() - loginAt;
 
-  if (inactiveMs > fifteenMin) {
+  // Warn at 14 days
+  if (
+    sessionAgeMs > SESSION_DURATION_MS - WARN_BEFORE_MS &&
+    sessionAgeMs < SESSION_DURATION_MS
+  ) {
+    const daysLeft = Math.ceil((SESSION_DURATION_MS - sessionAgeMs) / 86400000);
+    const alreadyWarned = (
+      await chrome.storage.local.get('vaultx_session_warned')
+    ).vaultx_session_warned;
+    if (!alreadyWarned) {
+      await chrome.storage.local.set({ vaultx_session_warned: true });
+      chrome.notifications?.create('session-expiry-warning', {
+        type: 'basic',
+        iconUrl: '/icons/icon128.png',
+        title: 'VaultX — Session expiring soon',
+        message: `Your VaultX session expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}. Open the extension to stay signed in.`,
+      });
+    }
+  }
+
+  // Expire at 15 days
+  if (sessionAgeMs > SESSION_DURATION_MS) {
     await clearSession();
-    console.log('[VaultX] Auto-locked due to inactivity');
+    await chrome.storage.local.remove('vaultx_session_warned');
+    console.log('[VaultX] Session expired after 15 days');
   }
 });
 
@@ -46,13 +70,18 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // same browser session. Cleared when browser closes. Perfect for masterKey.
 
 async function saveSession(data: SessionData): Promise<void> {
-  // masterKey stays in memory-only session storage
   await chrome.storage.session.set({
     session: { masterKey: data.masterKey, email: data.email },
   });
-  // accessToken persists in local storage for refresh-on-restart
+  // Preserve existing loginAt if already set (don't reset on reunlock)
+  const existing = await chrome.storage.local.get('persistedAuth');
+  const loginAt = existing.persistedAuth?.loginAt ?? Date.now();
   await chrome.storage.local.set({
-    persistedAuth: { accessToken: data.accessToken, email: data.email },
+    persistedAuth: {
+      accessToken: data.accessToken,
+      email: data.email,
+      loginAt,
+    },
   });
 }
 
@@ -75,7 +104,7 @@ async function getSession(): Promise<SessionData | null> {
 
 async function clearSession(): Promise<void> {
   await chrome.storage.session.remove('session');
-  await chrome.storage.local.remove('persistedAuth');
+  await chrome.storage.local.remove(['persistedAuth', 'vaultx_session_warned']);
 }
 
 // check if we have a persisted login (browser restarted, masterKey lost)
@@ -109,7 +138,14 @@ chrome.runtime.onMessage.addListener(
   }
 );
 
-async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
+async function handleMessage(
+  msg: ExtensionMessage & { type?: string }
+): Promise<unknown> {
+  // Handle non-enum message types first
+  if ((msg as any).type === 'STORE_PARTIAL_FIELDS') {
+    return handleStorePartialFields((msg as any).payload);
+  }
+
   switch (msg.type) {
     case MSG.CHECK_SESSION:
       return handleCheckSession();
@@ -238,41 +274,60 @@ async function handleReunlock(payload: {
 }): Promise<LoginResponse> {
   const persisted = await chrome.storage.local.get('persistedAuth');
   const email = persisted.persistedAuth?.email;
-  const accessToken = persisted.persistedAuth?.accessToken;
 
-  if (!email || !accessToken) {
-    return { success: false, error: 'No saved session. Please log in.' };
+  if (!email) {
+    return { success: false, error: 'No saved session. Please log in again.' };
   }
 
   try {
+    // Use EXACTLY the same path as handleLogin — derive authKey + vaultKey
     const prelogin = await apiRequest<{
       kdfSalt: string;
       kdfParams: { iterations: number; memory: number; parallelism: number };
     }>('/api/auth/prelogin', { method: 'POST', body: { email } });
 
-    const { vaultKey } = await deriveKeys(
+    const { authKey, vaultKey } = await deriveKeys(
       payload.password,
       prelogin.kdfSalt,
       prelogin.kdfParams
     );
 
-    // Get current vault_key_enc/iv from profile (works even if accessToken expired —
-    // apiRequest auto-refreshes on 401)
-    const profileRes = await apiRequest<{
-      vault_key_enc: string;
-      vault_key_iv: string;
-    }>('/api/user/profile', { token: accessToken });
+    // Re-login to get fresh token + vaultKeyEnc (same as full login)
+    const loginRes = await apiRequest<{
+      accessToken: string;
+      vaultKeyEnc: string;
+      vaultKeyIv: string;
+    }>('/api/auth/login', {
+      method: 'POST',
+      body: { email, authKey: toHex(authKey) },
+    });
 
-    const masterKeyBytes = await decryptBytes(
-      { ciphertext: profileRes.vault_key_enc, iv: profileRes.vault_key_iv },
+    // Decrypt masterKey exactly as handleLogin does
+    const masterKeyDecrypted = await decrypt(
+      { ciphertext: loginRes.vaultKeyEnc, iv: loginRes.vaultKeyIv },
       vaultKey
     );
 
-    if (masterKeyBytes.length !== 32) {
-      return { success: false, error: 'Incorrect master password' };
+    const binary = atob(masterKeyDecrypted);
+    const masterKeyBytes = new Uint8Array(
+      binary.length
+    ) as Uint8Array<ArrayBuffer>;
+    for (let i = 0; i < binary.length; i++) {
+      masterKeyBytes[i] = binary.charCodeAt(i);
     }
 
-    // Restore masterKey into memory-only session storage
+    if (masterKeyBytes.length !== 32) {
+      return {
+        success: false,
+        error: `masterKey wrong length: ${masterKeyBytes.length}`,
+      };
+    }
+
+    // Update persisted token (it may have rotated)
+    await chrome.storage.local.set({
+      persistedAuth: { accessToken: loginRes.accessToken, email },
+    });
+
     await chrome.storage.session.set({
       session: { masterKey: Array.from(masterKeyBytes), email },
     });
@@ -281,13 +336,27 @@ async function handleReunlock(payload: {
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Incorrect master password',
+      error: 'Incorrect master password',
     };
   }
 }
 
 async function handleLogout(): Promise<LogoutResponse> {
   await clearSession();
+  return { success: true };
+}
+
+async function handleStorePartialFields(payload: {
+  fields: Array<{ name: string; type: string; value: string; label: string }>;
+  domain: string;
+}): Promise<{ success: boolean }> {
+  await chrome.storage.session.set({
+    vaultx_partial_fields: {
+      fields: payload.fields,
+      domain: payload.domain,
+      timestamp: Date.now(),
+    },
+  });
   return { success: true };
 }
 
@@ -538,11 +607,14 @@ async function handleSaveFormFields(payload: {
   title: string;
   url: string;
   forceSave?: boolean;
+  mergePartial?: boolean;
 }): Promise<{
   saved: boolean;
   autoSave: boolean;
   id?: string;
   title?: string;
+  updated?: boolean;
+  silent?: boolean;
 }> {
   const session = await getSession();
   if (!session) return { saved: false, autoSave: false };
@@ -558,6 +630,36 @@ async function handleSaveFormFields(payload: {
     const masterKey = new Uint8Array(
       session.masterKey
     ) as Uint8Array<ArrayBuffer>;
+
+    // Merge partial fields from multi-step forms (e.g. email entered on step 1)
+    let allFields = payload.fields;
+    if (payload.mergePartial) {
+      const r = await chrome.storage.session.get('vaultx_partial_fields');
+      const partial = r.vaultx_partial_fields as
+        | {
+            fields: typeof payload.fields;
+            domain: string;
+            timestamp: number;
+          }
+        | undefined;
+
+      if (
+        partial &&
+        partial.domain === payload.domain &&
+        Date.now() - partial.timestamp < 5 * 60 * 1000
+      ) {
+        // Merge: current fields override partial fields (in case of overlap)
+        const mergedMap = new Map(partial.fields.map((f) => [f.name, f]));
+        payload.fields.forEach((f) => mergedMap.set(f.name, f));
+        allFields = Array.from(mergedMap.values());
+        console.log(
+          '[VaultX SW] Merged multi-step fields:',
+          allFields.map((f) => f.name)
+        );
+      }
+      // Clear partial regardless
+      await chrome.storage.session.remove('vaultx_partial_fields');
+    }
 
     // Map standard fields
     const standard: Record<string, string> = {};
@@ -586,7 +688,7 @@ async function handleSaveFormFields(payload: {
       'cvv',
     ];
 
-    for (const field of payload.fields) {
+    for (const field of allFields) {
       if (field.type === 'password' && !field.value) continue;
       if (standardKeys.includes(field.name)) {
         standard[field.name] = field.value;
@@ -649,6 +751,8 @@ async function handleSaveFormFields(payload: {
         autoSave,
         id: upsertRes.id,
         title: upsertRes.title,
+        updated: upsertRes.updated, // pass through so toast shows "Updated"
+        silent: (upsertRes as any).silent,
       };
     }
 
@@ -676,7 +780,13 @@ async function handleUpsertCredential(payload: {
   domain: string;
   title: string;
   url: string;
-}): Promise<{ saved: boolean; updated: boolean; id?: string; title?: string }> {
+}): Promise<{
+  saved: boolean;
+  updated: boolean;
+  silent?: boolean;
+  id?: string;
+  title?: string;
+}> {
   const session = await getSession();
   if (!session) return { saved: false, updated: false };
 
@@ -735,17 +845,34 @@ async function handleUpsertCredential(payload: {
 
   try {
     if (existing) {
-      // Update existing item
+      const passwordChanged = existing.payload.password !== newPassword;
+      const usernameChanged =
+        (existing.payload.username || existing.payload.email || '') !==
+        newUsername;
+
+      // Nothing changed — silent, no toast, no save needed
+      if (!passwordChanged && !usernameChanged) {
+        return {
+          saved: true, // mark as "handled" so no banner shows
+          updated: false,
+          silent: true, // signal to content script: show nothing
+          id: existing.id,
+          title: existing.payload.title || (itemPayload.title as string),
+        };
+      }
+
+      // Something changed — update and notify
       await apiRequest(`/api/vault/items/${existing.id}`, {
         method: 'PUT',
         token: session.accessToken,
-        body: { encryptedData: ciphertext, iv },
+        body: { type: 'login', encryptedData: ciphertext, iv },
       });
       return {
         saved: true,
         updated: true,
+        silent: false,
         id: existing.id,
-        title: itemPayload.title,
+        title: existing.payload.title || (itemPayload.title as string),
       };
     } else {
       // Create new
