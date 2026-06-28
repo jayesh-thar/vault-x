@@ -96,7 +96,7 @@ is actually visible on the page. Try opening the popup and clicking **Fill** man
 **"Network error" or can't log in** — The free-tier backend may be sleeping.
 Wait 10–15 seconds and try again.
 
-**Forgot master password** — Use the web app's [Forgot Password](https://vaultx-jayesh.vercel.app/forgot-password) page.
+**Forgot master password** — Use the web app's [Forgot Password](https://vault-x.xyz/forgot-password) page.
 Upload your recovery key file to recover your vault intact, or use email OTP to reset
 (note: OTP reset clears your vault — it's zero-knowledge).
 
