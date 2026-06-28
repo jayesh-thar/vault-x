@@ -359,4 +359,8 @@ MIT — see `LICENSE`.
 
 ---
 
+<p align="center">
+  <img src="https://visitor-badge.laobi.icu/badge?page_id=jayesh-thar.vault-x" alt="Visitors">
+</p>
+
 <p align="center">Built with care for privacy. 🔐</p>
