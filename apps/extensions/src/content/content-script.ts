@@ -265,8 +265,16 @@ async function attemptSave(
   try {
     const session = (await chrome.runtime.sendMessage({
       type: 'CHECK_SESSION',
-    })) as { isLoggedIn: boolean };
-    if (!session?.isLoggedIn) return;
+    })) as { isLoggedIn: boolean; needsUnlock?: boolean };
+    if (!session?.isLoggedIn) {
+      // Not logged in — save fields to pending so user can save after logging in
+      await chrome.runtime.sendMessage({
+        type: 'SAVE_PENDING_CREDENTIAL',
+        payload: { fields, domain, title, url },
+      });
+      console.log('[VaultX] Not logged in — saved to pending queue');
+      return;
+    }
   } catch {
     return;
   }
